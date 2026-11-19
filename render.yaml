@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: freqtrade-render-quant
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/v1/ping
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: FREQTRADE__EXCHANGE__KEY
+        sync: false
+      - key: FREQTRADE__EXCHANGE__SECRET
+        sync: false
+      - key: FREQTRADE__API_SERVER__PASSWORD
+        sync: false
+      - key: FREQTRADE__API_SERVER__JWT_SECRET_KEY
+        sync: false
+      - key: FREQTRADE__API_SERVER__WS_TOKEN
+        sync: false
+      - key: FREQTRADE__TELEGRAM__ENABLED
+        sync: false
+      - key: FREQTRADE__TELEGRAM__TOKEN
+        sync: false
+      - key: FREQTRADE__TELEGRAM__CHAT_ID
+        sync: false
