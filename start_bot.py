@@ -1408,15 +1408,28 @@ def install_pt_br_hooks() -> None:
         if cid != str(CHAT_ID) and uid != str(CHAT_ID):
             return  # Proteção P0: Ignora mensagens de usuários não autorizados
         txt = update.message.text.strip()
-        if txt == "❓ Por Que Não Entrou?":
-            pending_input.pop(cid, None)
-            await _cmd_why(update, context)
-            raise ApplicationHandlerStop()
-        if txt in ("🎯 Mudar Estratégia", "🎯 Alternar Estratégia"):
+        norm = txt.replace(" ", "").lower()
+
+        _ALIASES_ESTRATEGIA = {
+            "/estrategia", "estrategia", "/strategy", "strategy", "/strat",
+            "🎯mudarestratégia", "🎯mudarestrategia", "🎯alternarestratégia", "🎯alternarestrategia"
+        }
+        _ALIASES_WHY = {
+            "/why", "why", "/porque", "porque", "/porquenaoentrou", "/porquênãoentrou",
+            "❓porquênãoentrou?", "❓porquenaoentrou?", "porquenaoentrou"
+        }
+
+        if norm in _ALIASES_ESTRATEGIA or txt in ("🎯 Mudar Estratégia", "🎯 Alternar Estratégia"):
             pending_input.pop(cid, None)
             await _cmd_estrategia(update, context)
             raise ApplicationHandlerStop()
-        if txt == "🏦 Corretora / API":
+
+        if norm in _ALIASES_WHY or txt == "❓ Por Que Não Entrou?":
+            pending_input.pop(cid, None)
+            await _cmd_why(update, context)
+            raise ApplicationHandlerStop()
+
+        if txt == "🏦 Corretora / API" or norm in ("/corretora", "corretora"):
             pending_input.pop(cid, None)
             await _cmd_corretora(update, context)
             raise ApplicationHandlerStop()
@@ -1454,14 +1467,15 @@ def install_pt_br_hooks() -> None:
         if app_id not in registered_apps:
             registered_apps.add(app_id)
             orig_add_handler(self, CallbackQueryHandler(_cb_unkiorra, pattern=r"^unk_"), group=-1)
-            orig_add_handler(self, CommandHandler("corretora", _cmd_corretora))
-            orig_add_handler(self, CommandHandler("estrategia", _cmd_estrategia))
-            orig_add_handler(self, CommandHandler("why", _cmd_why))
+            orig_add_handler(self, CommandHandler("corretora", _cmd_corretora), group=-1)
+            orig_add_handler(self, CommandHandler("estrategia", _cmd_estrategia), group=-1)
+            orig_add_handler(self, CommandHandler("strategy", _cmd_estrategia), group=-1)
+            orig_add_handler(self, CommandHandler("why", _cmd_why), group=-1)
             orig_add_handler(self, CommandHandler("set_corretora", _cmd_set_corretora))
             orig_add_handler(self, CommandHandler("set_api", _cmd_set_api))
             orig_add_handler(self, CommandHandler("modo_simulado", lambda u, c: _cmd_modo(u, c, True)))
             orig_add_handler(self, CommandHandler("modo_real", lambda u, c: _cmd_modo(u, c, False)))
-            orig_add_handler(self, MessageHandler(filters.TEXT & ~filters.COMMAND, _btn_cb), group=-1)
+            orig_add_handler(self, MessageHandler(filters.TEXT, _btn_cb), group=-1)
             print("PT-BR_BUTTON_HANDLER_REGISTERED", flush=True)
         return res
 
