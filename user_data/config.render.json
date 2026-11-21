@@ -69,7 +69,7 @@
     "username": "freqtrader",
     "password": "CHANGE_ME_VIA_ENV_OR_SECRET_FILE"
   },
-  "strategy": "RenderQuantV1",
+  "strategy": "RenderQuantV3_Defensive",
   "initial_state": "running",
   "order_types": {
     "entry": "limit",

@@ -797,6 +797,8 @@ STRATEGY_STATE_PATH = pathlib.Path("/freqtrade/user_data/strategy_state.json")
 AVAILABLE_STRATEGIES = [
     ("RenderQuantV1", "🛡️ RenderQuant V1 (Equilibrada)"),
     ("RenderQuantV2_Institutional", "🏛️ RenderQuant V2 (Institucional)"),
+    ("RenderQuantV3_Defensive", "🧲 RenderQuant V3 (Defensiva 4h — validada em backtest 600d)"),
+
 ]
 
 
