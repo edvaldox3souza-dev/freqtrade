@@ -673,12 +673,17 @@ def format_estrategia_text() -> str:
     st = get_strategy_state()
     active = st.get("active_strategy", "RenderQuantV1")
     ts = st.get("updated_at", time.strftime("%H:%M:%S"))
+    is_v2 = (active == "RenderQuantV2_Institutional")
+    ker_min = "0.42 (Rigor Extremo)" if is_v2 else "0.35 (Equilibrado)"
     return (
-        f"🎯 *Seleção de Estratégia de Operação*\n\n"
+        f"🎯 *Seleção de Estratégia & Gestão Quantitativa*\n\n"
         f"• *Estratégia ativa no momento:* `{active}`\n"
-        f"• *Última alteração:* `{ts}`\n\n"
+        f"• *Última alteração:* `{ts}`\n"
+        f"• *Filtro KER (Kaufman Anti-Ruído):* `{ker_min}`\n"
+        f"• *Teto de Risco (Portfolio Heat):* `Máx 3.00% da Banca`\n"
+        f"• *Circuit Breaker Diário:* `-2.50% de Drawdown`\n\n"
         f"👇 *Toque em uma das opções abaixo para alternar:* \n"
-        f"_(A nova estratégia assumirá as próximas entradas sem interromper posições abertas)_"
+        f"_(A comutação é feita em tempo real e preserva trades já abertos com trailing dedicado)_"
     )
 
 

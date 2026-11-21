@@ -2,16 +2,14 @@ import json
 import logging
 import pathlib
 import time
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 import numpy as np
-import pandas as pd
 import talib.abstract as ta
-from pandas import DataFrame
-
 from freqtrade.persistence import Trade
 from freqtrade.strategy import IStrategy
+from pandas import DataFrame
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +63,12 @@ class RenderQuantV1(IStrategy):
     kelly_fraction: float = 0.25           # Quarter-Kelly
     max_stake_ratio: float = 0.10          # Teto máximo de 10% da carteira por trade
     cold_start_stake_ratio: float = 0.05   # 5% nos primeiros trades
+
+    # Kaufman Efficiency Ratio & Portfolio Heat (Claude Fable 5.1 / Maverick / HyperGrok)
+    KER_WINDOW: int = 14
+    KER_MIN_V1: float = 0.35               # Filtro de eficiência para modo V1 (veto de chop/ruído)
+    KER_MIN_V2: float = 0.42               # Filtro de eficiência para modo V2 Institucional
+    portfolio_heat_limit: float = 0.03     # Hard cap de 3.0% de risco total aberto agregado sobre o equity
 
     # Clusters de Correlação (HyperGrok) - Evita risco direcional duplicado
     CORRELATION_CLUSTERS = {
@@ -199,6 +203,13 @@ class RenderQuantV1(IStrategy):
         # 7. Regime de Mercado (Maverick)
         dataframe["market_regime_bull"] = (dataframe["sma50"] > dataframe["sma150"]).astype(np.int8)
 
+        # 8. Kaufman Efficiency Ratio (KER - Maverick MCP & Claude Fable 5.1)
+        # KER = |close_t - close_{t-w}| / sum(|close_i - close_{i-1}|)
+        ker_dir = (close - close.shift(self.KER_WINDOW)).abs()
+        ker_vol = close.diff().abs().rolling(self.KER_WINDOW, min_periods=self.KER_WINDOW).sum()
+        safe_ker_vol = ker_vol.replace(0, np.nan)
+        dataframe["ker"] = (ker_dir / safe_ker_vol).clip(lower=0.0, upper=1.0).fillna(0.0).astype(np.float32)
+
         return dataframe
 
     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
@@ -262,6 +273,10 @@ class RenderQuantV1(IStrategy):
             & (dataframe["rsi"] > dataframe["rsi"].shift(1))
         )
 
+        # 6. Filtro Kaufman Efficiency Ratio (Veto de Chop / Ruído lateral)
+        active_ker_min = self.KER_MIN_V2 if is_v2 else self.KER_MIN_V1
+        ker_ok = dataframe["ker"] >= active_ker_min
+
         # Condição de Entrada Composta
         entry_conditions = (
             minervini_ok
@@ -269,6 +284,7 @@ class RenderQuantV1(IStrategy):
             & near_structural_support
             & regime_ok
             & momentum_ok
+            & ker_ok
             & (dataframe["volume"] > 0)
         )
 
@@ -312,7 +328,7 @@ class RenderQuantV1(IStrategy):
         rate: float,
         time_in_force: str,
         current_time: datetime,
-        entry_tag: Optional[str],
+        entry_tag: str | None,
         side: str,
         **kwargs: Any,
     ) -> bool:
@@ -321,7 +337,7 @@ class RenderQuantV1(IStrategy):
         1. Daily Loss Circuit Breaker: bloqueia novas compras se a carteira cair mais de 2.5% no dia UTC.
         2. Trava de Clusters de Correlação: limita no máximo 1 trade ativo por grupo de ativos correlacionados.
         """
-        today = current_time.astimezone(timezone.utc).date()
+        today = current_time.astimezone(UTC).date()
         total_balance = 1000.0
         if self.wallets is not None:
             try:
@@ -336,7 +352,7 @@ class RenderQuantV1(IStrategy):
 
         # 1. Validação do Circuit Breaker Diário (Cálculo robusto sem exceções silenciosas)
         try:
-            today_start = datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc)
+            today_start = datetime.combine(today, datetime.min.time(), tzinfo=UTC)
             closed_trades = Trade.get_trades_proxy(is_open=False)
             closed_today = [
                 t for t in closed_trades
@@ -394,6 +410,47 @@ class RenderQuantV1(IStrategy):
         except Exception as exc:
             logger.debug("RenderQuant: Falha não crítica na validação de clusters: %s", exc)
 
+        # 3. Portfolio Heat Gatekeeper (Hard Cap 3.0% de risco total aberto - Claude Fable 5.1 / HyperGrok)
+        try:
+            open_trades = Trade.get_trades_proxy(is_open=True)
+            risky_open = 0.0
+            for t in open_trades:
+                sl_price = getattr(t, "stop_loss_or_limit", None)
+                o_rate = getattr(t, "open_rate", None)
+                if sl_price is None and o_rate:
+                    sl_price = o_rate * (1.0 - abs(self.stoploss))
+                if sl_price and o_rate:
+                    risky_open += abs(o_rate - sl_price) * float(getattr(t, "amount", 0.0))
+
+            entry_sl_price = rate * (1.0 - abs(self.stoploss))
+            incoming_risk = abs(rate - entry_sl_price) * float(amount)
+            total_risk = risky_open + incoming_risk
+            portfolio_heat = total_risk / max(total_balance, 10.0)
+
+            if portfolio_heat > self.portfolio_heat_limit:
+                logger.warning(
+                    "RenderQuant [PORTFOLIO HEAT VETO]: Heat total projetado de %.2f%% excede o limite institucional de %.2f%%. "
+                    "(Risco aberto: $%.2f, Risco entrante: $%.2f, Total: $%.2f, Equity: $%.2f). Entrada em %s vetada.",
+                    portfolio_heat * 100,
+                    self.portfolio_heat_limit * 100,
+                    risky_open,
+                    incoming_risk,
+                    total_risk,
+                    total_balance,
+                    pair,
+                )
+                return False
+
+            logger.info(
+                "RenderQuant [PORTFOLIO HEAT PASS]: Heat projetado %.2f%% / %.2f%% (Equity $%.2f). Entrada em %s autorizada.",
+                portfolio_heat * 100,
+                self.portfolio_heat_limit * 100,
+                total_balance,
+                pair,
+            )
+        except Exception as exc:
+            logger.debug("RenderQuant: Falha não crítica na avaliação de Portfolio Heat: %s", exc)
+
         return True
 
     def custom_stake_amount(
@@ -402,10 +459,10 @@ class RenderQuantV1(IStrategy):
         current_time: datetime,
         current_rate: float,
         proposed_stake: float,
-        min_stake: Optional[float],
+        min_stake: float | None,
         max_stake: float,
         leverage: float,
-        entry_tag: Optional[str],
+        entry_tag: str | None,
         side: str,
         **kwargs: Any,
     ) -> float:
@@ -521,3 +578,42 @@ class RenderQuantV1(IStrategy):
                 return max(dynamic_stop, 0.001)   # Breakeven líquido garantido (+0.1%)
 
         return dynamic_stop
+
+    def get_risk_status(self) -> dict[str, Any]:
+        """Snapshot quantitativo em tempo real para o Telegram e Painel Web (Claude Fable 5.1)."""
+        total_balance = 1000.0
+        if self.wallets is not None:
+            try:
+                total_balance = float(self.wallets.get_total_stake_amount())
+            except Exception:
+                pass
+
+        mode = self._get_active_strategy_mode()
+        is_v2 = (mode == "RenderQuantV2_Institutional")
+        active_ker = self.KER_MIN_V2 if is_v2 else self.KER_MIN_V1
+
+        open_trades = []
+        risky_open = 0.0
+        try:
+            open_trades = Trade.get_trades_proxy(is_open=True)
+            for t in open_trades:
+                sl_price = getattr(t, "stop_loss_or_limit", None)
+                o_rate = getattr(t, "open_rate", None)
+                if sl_price is None and o_rate:
+                    sl_price = o_rate * (1.0 - abs(self.stoploss))
+                if sl_price and o_rate:
+                    risky_open += abs(o_rate - sl_price) * float(getattr(t, "amount", 0.0))
+        except Exception:
+            pass
+
+        heat_pct = (risky_open / max(total_balance, 10.0)) if total_balance > 0 else 0.0
+
+        return {
+            "mode": mode,
+            "ker_min": active_ker,
+            "portfolio_heat_pct": round(heat_pct * 100, 2),
+            "portfolio_heat_limit_pct": round(self.portfolio_heat_limit * 100, 2),
+            "open_trades_count": len(open_trades),
+            "risky_open_usd": round(risky_open, 2),
+            "daily_loss_limit_pct": round(self.daily_loss_stop_pct * 100, 2),
+        }
