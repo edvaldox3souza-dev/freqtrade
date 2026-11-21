@@ -7,6 +7,7 @@ import sys
 import threading
 import time
 import urllib.request
+import uuid
 
 def _load_tg_creds():
     tok = os.environ.get("FREQTRADE__TELEGRAM__TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -466,7 +467,7 @@ PENDING_INPUT_TTL_SEC = 300
 
 
 def _atomic_write_text(dst_path: pathlib.Path, content: str) -> None:
-    tmp_path = dst_path.with_name(f".{dst_path.name}.{os.getpid()}.tmp")
+    tmp_path = dst_path.with_name(f".{dst_path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     tmp_path.write_text(content, encoding="utf-8")
     os.replace(tmp_path, dst_path)
 
@@ -555,6 +556,12 @@ def update_exchange_config(
             if not cleaned:
                 raise ValueError("Nome de corretora inválido")
             ex["name"] = cleaned
+            target_stake = "USD" if cleaned == "kraken" else "USDT"
+            cfg["stake_currency"] = target_stake
+            old_pairs = ex.get("pair_whitelist", ["BTC/USD", "ETH/USD"])
+            ex["pair_whitelist"] = [
+                re.sub(r"/(USD|USDT)$", f"/{target_stake}", p) for p in old_pairs
+            ]
         if api_key is not None:
             ex["key"] = api_key.strip()
         if api_secret is not None:
@@ -615,11 +622,12 @@ AVAILABLE_STRATEGIES = [
 
 
 def get_strategy_state() -> dict:
-    if STRATEGY_STATE_PATH.exists():
-        try:
-            return json.loads(STRATEGY_STATE_PATH.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+    with _RUNTIME_CFG_LOCK:
+        if STRATEGY_STATE_PATH.exists():
+            try:
+                return json.loads(STRATEGY_STATE_PATH.read_text(encoding="utf-8"))
+            except Exception:
+                pass
     active_env = os.environ.get("FREQTRADE_STRATEGY", "RenderQuantV1")
     return {
         "active_strategy": active_env,
@@ -628,16 +636,16 @@ def get_strategy_state() -> dict:
 
 
 def update_strategy_state(strat_name: str) -> dict:
-    state = get_strategy_state()
-    state["active_strategy"] = strat_name
-    state["updated_at"] = time.strftime("%H:%M:%S UTC")
-    try:
-        STRATEGY_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _atomic_write_text(STRATEGY_STATE_PATH, json.dumps(state, indent=2, ensure_ascii=False) + "\n")
-    except Exception as exc:
-        print("PT-BR_STRATEGY_STATE_WARN:", exc, flush=True)
-
     with _RUNTIME_CFG_LOCK:
+        state = get_strategy_state()
+        state["active_strategy"] = strat_name
+        state["updated_at"] = time.strftime("%H:%M:%S UTC")
+        try:
+            STRATEGY_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            _atomic_write_text(STRATEGY_STATE_PATH, json.dumps(state, indent=2, ensure_ascii=False) + "\n")
+        except Exception as exc:
+            print("PT-BR_STRATEGY_STATE_WARN:", exc, flush=True)
+
         if RUNTIME_CONFIG_PATH.exists():
             try:
                 cfg = json.loads(RUNTIME_CONFIG_PATH.read_text(encoding="utf-8"))
@@ -731,7 +739,7 @@ def build_web_pt_br_script() -> str:
         "  const forms=document.querySelectorAll('form');"
         "  for(let f=0;f<forms.length;f++){"
         "    const ins=forms[f].querySelectorAll('input:not([type=\"password\"]):not([type=\"checkbox\"])');"
-        "    if(ins.length>=1&&!ins[0].value)setVueVal(ins[0],'Unkiorra Trade Bot');"
+        "    if(ins.length>=1&&!ins[0].value)setVueVal(ins[0],'freqtrader');"
         "  }"
         "}"
         "function walk(n){"
@@ -771,7 +779,7 @@ def build_web_pt_br_script() -> str:
         "window.addEventListener('load',()=>setTimeout(runWalk,200));"
         "window.addEventListener('click',()=>{setTimeout(runWalk,120);setTimeout(runWalk,450);},true);"
         "window.addEventListener('popstate',()=>setTimeout(runWalk,150));"
-        "setInterval(runWalk,500);"
+        "runWalk();"
         "})();</scr" + "ipt>"
     )
 
@@ -1278,8 +1286,11 @@ def install_pt_br_hooks() -> None:
         tg = tg_ref.get("self")
         if not tg or not update or not update.message or not update.message.text:
             return
-        txt = update.message.text.strip()
         cid = str(update.effective_chat.id) if update.effective_chat else ""
+        uid = str(update.effective_user.id) if update.effective_user else ""
+        if cid != str(CHAT_ID) and uid != str(CHAT_ID):
+            return  # Proteção P0: Ignora mensagens de usuários não autorizados
+        txt = update.message.text.strip()
         if txt == "🎯 Alternar Estratégia":
             pending_input.pop(cid, None)
             await _cmd_estrategia(update, context)
@@ -1413,8 +1424,12 @@ def main() -> None:
     if not db_url:
         print("ERROR: DATABASE_URL não definida nas variáveis de ambiente.", file=sys.stderr, flush=True)
         raise SystemExit(1)
+    # Correção P0 SRE: normaliza dialeto do SQLAlchemy 2.0 (postgres:// -> postgresql://)
+    if db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql://", 1)
 
     os.environ["FREQTRADE__API_SERVER__LISTEN_PORT"] = os.environ.get("PORT", "10000")
+    # Correção P0: Remove --strategy do sys.argv para que o reload respeite runtime_config.json e a Meta-Strategy dinamicamente!
     sys.argv = [
         "freqtrade",
         "trade",
@@ -1422,8 +1437,6 @@ def main() -> None:
         str(ensure_runtime_config()),
         "--userdir",
         "/freqtrade/user_data",
-        "--strategy",
-        get_strategy_state().get("active_strategy") or os.environ.get("FREQTRADE_STRATEGY", "RenderQuantV1"),
         "--db-url",
         db_url,
     ]

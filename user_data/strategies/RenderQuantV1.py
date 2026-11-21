@@ -163,12 +163,16 @@ class RenderQuantV1(IStrategy):
         dataframe["macd"] = macd_res["macd"]
         dataframe["macd_signal"] = macd_res["macdsignal"]
 
-        # 3. Modified Z-Score de Volume via MAD (Trading Skills)
+        # 3. Modified Z-Score de Volume via MAD (Trading Skills - Proteção Fail-Closed SRE)
         rolling_vol = vol.rolling(window=72)
-        med_vol = rolling_vol.median()
+        med_vol = rolling_vol.median().fillna(vol)
         abs_dev = (vol - med_vol).abs()
-        mad_vol = abs_dev.rolling(window=72).median().replace(0, 1e-6)
-        dataframe["vol_modified_z"] = (0.6745 * (vol - med_vol) / mad_vol).astype(np.float32)
+        mad_vol = abs_dev.rolling(window=72).median().fillna(1.0)
+        safe_mad = np.maximum(mad_vol.values, 1e-4)
+        raw_z = 0.6745 * (vol.values - med_vol.values) / safe_mad
+        dataframe["vol_modified_z"] = np.clip(
+            np.nan_to_num(raw_z, nan=0.0, posinf=10.0, neginf=-10.0), -10.0, 10.0
+        ).astype(np.float32)
         dataframe["is_whale_vol"] = (dataframe["vol_modified_z"] > 3.0).astype(np.int8)
 
         # 4. Pivôs Floor-Trader & Anti-Chasing (Trading Skills)
@@ -185,9 +189,9 @@ class RenderQuantV1(IStrategy):
         dataframe["dual_bullish"] = (ema_up & macd_up).astype(np.int8)
         dataframe["dual_conflict"] = (ema_up != macd_up).astype(np.int8)
 
-        # 6. Métrica de ATR percentual para o stoploss
+        # 6. Métrica de ATR percentual para o stoploss (Blindagem contra NaN no warm-up)
         dataframe["atr_pct"] = np.where(
-            close > 0,
+            (close > 0) & (dataframe["atr"].notna()),
             (dataframe["atr"] / close).astype(np.float32),
             0.015,
         )
@@ -345,14 +349,20 @@ class RenderQuantV1(IStrategy):
             for t in open_trades:
                 try:
                     if hasattr(t, "calc_profit_abs"):
-                        unrealized_pnl += float(t.calc_profit_abs(rate))
+                        # Correção P0 SRE: usar a cotação real do próprio trade aberto, jamais o rate do par avaliado!
+                        t_rate = getattr(t, "current_rate", None) or getattr(t, "open_rate", None)
+                        if t_rate is not None and t_rate > 0:
+                            unrealized_pnl += float(t.calc_profit_abs(t_rate))
+                        else:
+                            unrealized_pnl += float(getattr(t, "realized_profit", 0.0) or 0.0)
                     else:
                         unrealized_pnl += float(getattr(t, "realized_profit", 0.0) or 0.0)
                 except Exception:
                     unrealized_pnl += float(getattr(t, "realized_profit", 0.0) or 0.0)
 
             total_daily_pnl = realized_pnl + unrealized_pnl
-            daily_dd_pct = total_daily_pnl / max(self.start_of_day_equity, 10.0)
+            base_eq = self.start_of_day_equity if (self.start_of_day_equity is not None and self.start_of_day_equity > 0) else total_balance
+            daily_dd_pct = total_daily_pnl / max(base_eq, 10.0)
 
             if daily_dd_pct <= -self.daily_loss_stop_pct:
                 logger.warning(
@@ -437,7 +447,7 @@ class RenderQuantV1(IStrategy):
                 if not is_bull:
                     calculated_stake *= lateral_multiplier
 
-        # 3. Ajuste por Quarter-Kelly estritamente para N >= 100 trades (elimina ruído estatístico)
+        # 3. Ajuste por Quarter-Kelly estritamente para N >= 200 trades (Diretriz P0 Claude Fable 5.1)
         try:
             closed_trades = Trade.get_trades_proxy(is_open=False)
             profits = [
@@ -445,16 +455,20 @@ class RenderQuantV1(IStrategy):
                 for t in closed_trades
                 if getattr(t, "close_profit", None) is not None
             ]
-            if len(profits) >= 100:
+            if len(profits) >= 200:
                 wins = [p for p in profits if p > 0]
                 losses = [abs(p) for p in profits if p < 0]
                 if wins and losses:
-                    win_rate = len(wins) / len(profits)
-                    payoff = (sum(wins) / len(wins)) / (sum(losses) / len(losses))
-                    full_kelly = win_rate - ((1.0 - win_rate) / payoff)
-                    quarter_kelly = max(0.0, full_kelly * self.kelly_fraction)
-                    kelly_cap = total_wallet * min(active_stake_ratio, max(0.02, quarter_kelly))
-                    calculated_stake = min(calculated_stake, kelly_cap)
+                    avg_win = sum(wins) / len(wins)
+                    avg_loss = sum(losses) / len(losses)
+                    if avg_loss > 0:
+                        win_rate = len(wins) / len(profits)
+                        payoff = avg_win / avg_loss
+                        if payoff > 0:
+                            full_kelly = win_rate - ((1.0 - win_rate) / payoff)
+                            quarter_kelly = max(0.0, full_kelly * self.kelly_fraction)
+                            kelly_cap = total_wallet * min(active_stake_ratio, max(0.02, quarter_kelly))
+                            calculated_stake = min(calculated_stake, kelly_cap)
         except Exception:
             pass
 
