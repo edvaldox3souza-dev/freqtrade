@@ -113,47 +113,47 @@ def is_authorized_chat(update) -> bool:
 
 
 PT_BR_KEYBOARD = [
-    ["🎯 Mudar Estratégia", "❓ Por Que Não Entrou?"],
-    ["📊 Operações Abertas", "💰 Lucros e Ganhos"],
-    ["💳 Saldo da Conta", "📈 Estatísticas"],
+    ["🎯 Mudar Estratégia", "❓ Por Que Não?"],
+    ["📊 Operações Abertas", "💰 Resultados"],
+    ["💳 Saldo da Conta", "📈 Desempenho"],
     ["📋 Pares Ativos", "🏆 Por Moeda"],
     ["▶️ Iniciar Robô", "⏸️ Pausar Robô"],
-    ["🏦 Corretora / API", "🩺 Saúde do Robô"],
-    ["🔄 Atualizar Config", "❓ Ajuda (Guia)"],
+    ["🏦 Corretora", "🩺 Diagnóstico"],
+    ["⚙️ Configurações", "❓ Ajuda (Guia)"],
 ]
 
 PT_BR_BUTTON_MAP = {
     "🎯 Mudar Estratégia": "_unkiorra_estrategia",
     "🎯 Alternar Estratégia": "_unkiorra_estrategia",
+    "❓ Por Que Não?": "_unkiorra_why",
     "❓ Por Que Não Entrou?": "_unkiorra_why",
     "📊 Operações Abertas": "_status",
+    "💰 Resultados": "_profit",
     "💰 Lucros e Ganhos": "_profit",
     "💳 Saldo da Conta": "_balance",
+    "📈 Desempenho": "_stats",
     "📈 Estatísticas": "_stats",
     "🏆 Por Moeda": "_performance",
     "📋 Pares Ativos": "_whitelist",
     "▶️ Iniciar Robô": "_start",
     "⏸️ Pausar Robô": "_stop",
+    "⚙️ Configurações": "_reload_config",
     "🔄 Atualizar Config": "_reload_config",
+    "🔄 Recarregar": "_reload_config",
     "❓ Ajuda (Guia)": "_help",
+    "🏦 Corretora": "_unkiorra_corretora",
     "🏦 Corretora / API": "_unkiorra_corretora",
-    "🩺 Saúde do Robô": "_health",
+    "🩺 Diagnóstico": "_cmd_diag",
+    "🩺 Saúde do Robô": "_cmd_diag",
 }
 
 WELCOME_PT_BR = (
-    "🤖 *Unkiorra Trade Bot (Freqtrade)* — *Painel em Português (BR)*\n\n"
-    "✅ *Estado do Robô:* Ativo e monitorando o mercado\n"
-    "🏦 *Corretora:* Kraken (`10 pares USD` | Estratégia: `RenderQuantV1` `15m`)\n"
-    "🛡️ *Modo Atual:* Simulação (`Dry-Run` — Carteira: `1000 USD` | Banco: `Neon PostgreSQL`)\n"
-    "⚡ *Keep-Alive:* Ativo (ping automático a cada 9 min no Render)\n\n"
-    "📌 *Use os botões em Português abaixo para controlar o robô:*\n"
-    "• *📊 Operações Abertas* (`/status`) — Ver trades ativos\n"
-    "• *💰 Lucros e Ganhos* (`/profit`) — Resumo de lucro e acerto\n"
-    "• *💳 Saldo da Conta* (`/balance`) — Saldo disponível em USD\n"
-    "• *📅 Lucro Diário* (`/daily`) — Resultado dia a dia\n"
-    "• *📈 Estatísticas* (`/stats`) — Vitórias, derrotas e saídas\n"
-    "• *🏆 Por Moeda* (`/performance`) — Desempenho por par\n"
-    "• *❓ Ajuda (Guia)* (`/help`) — Manual completo em Português"
+    "🤖 *Unkiorra Trade Bot*\n\n"
+    "✅ *Robô Ativo:* Monitorando oportunidades em tempo real\n"
+    "🏦 *Corretora:* Kraken (`Pares USD` | `RenderQuantV1` `15m`)\n"
+    "🛡️ *Modo:* Simulação (`Dry-Run` — Carteira Virtual: `1000 USD`)\n"
+    "⚡ *Proteção de Capital:* Ativa (`KER` + `Trailing Stop Pós-Taxas`)\n\n"
+    "👇 *Toque nos botões abaixo para controlar o robô:*"
 )
 
 HELP_PT_BR = (
@@ -1056,7 +1056,7 @@ LITERAL_TRANSLATIONS = [
     ("Status: `stopped`", "🛑 *Status:* `Robô parado (pausado).`"),
     ("*Status:* `stopping ...`", "⏳ *Status:* `Pausando o robô...`"),
     ("Status: `stopping ...`", "⏳ *Status:* `Pausando o robô...`"),
-    ("*Status:* `process died`", "🔄 *Status:* `Reiniciando serviço após atualização...`"),
+    ("*Status:* `process died`", "🔴 *Status:* `Processo interrompido — reiniciando com segurança...`"),
     ("Stopping trader ...", "🛑 Pausando o robô de operações..."),
     ("*Warning:* `no active trade`", "ℹ️ *Aviso:* `Nenhuma operação aberta no momento.`"),
     ("Warning: `no active trade`", "ℹ️ *Aviso:* `Nenhuma operação aberta no momento.`"),
@@ -1466,13 +1466,15 @@ def install_pt_br_hooks() -> None:
         }
         _ALIASES_WHY = {
             "/why", "why", "/porque", "porque", "/porquenaoentrou", "/porquênãoentrou",
-            "❓porquênãoentrou?", "❓porquenaoentrou?", "porquenaoentrou"
+            "❓porquênãoentrou?", "❓porquenaoentrou?", "porquenaoentrou",
+            "❓porquênão?", "❓porquenao?", "porquenao", "porquênão"
         }
         _ALIASES_DIAG = {
-            "/diag", "diag", "/diagnostico", "diagnostico", "/saude", "saude", "🩺saúdedorobô", "🩺saudedorobo"
+            "/diag", "diag", "/diagnostico", "diagnostico", "/saude", "saude",
+            "🩺saúdedorobô", "🩺saudedorobo", "🩺diagnóstico", "🩺diagnostico"
         }
 
-        if norm in _ALIASES_DIAG or txt == "🩺 Saúde do Robô":
+        if norm in _ALIASES_DIAG or txt in ("🩺 Diagnóstico", "🩺 Saúde do Robô"):
             pending_input.pop(cid, None)
             await _cmd_diag(update, context)
             raise ApplicationHandlerStop()
@@ -1482,12 +1484,12 @@ def install_pt_br_hooks() -> None:
             await _cmd_estrategia(update, context)
             raise ApplicationHandlerStop()
 
-        if norm in _ALIASES_WHY or txt == "❓ Por Que Não Entrou?":
+        if norm in _ALIASES_WHY or txt in ("❓ Por Que Não?", "❓ Por Que Não Entrou?"):
             pending_input.pop(cid, None)
             await _cmd_why(update, context)
             raise ApplicationHandlerStop()
 
-        if txt == "🏦 Corretora / API" or norm in ("/corretora", "corretora"):
+        if txt in ("🏦 Corretora", "🏦 Corretora / API") or norm in ("/corretora", "corretora", "exchange"):
             pending_input.pop(cid, None)
             await _cmd_corretora(update, context)
             raise ApplicationHandlerStop()
