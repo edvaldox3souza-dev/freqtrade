@@ -389,11 +389,11 @@ def build_ai_guardian_inline_markup():
     enabled = s.get("enabled", False)
     curr_conv = float(s.get("min_conviccao", 0.65))
 
-    # Botão de Ativar/Pausar
+    # Botão de Ativar/Pausar com status explícito
     if enabled:
-        toggle_btn = InlineKeyboardButton("⏸️ Pausar IA", callback_data="unk_ai:toggle")
+        toggle_btn = InlineKeyboardButton("🟢 IA ATIVADA (Toque para Pausar)", callback_data="unk_ai:toggle")
     else:
-        toggle_btn = InlineKeyboardButton("▶️ Ativar IA", callback_data="unk_ai:toggle")
+        toggle_btn = InlineKeyboardButton("🔴 IA PAUSADA (Toque para ATIVAR)", callback_data="unk_ai:toggle")
 
     # Botões de patamares de convicção
     conv_options = [0.60, 0.65, 0.70, 0.80]
@@ -413,5 +413,8 @@ def build_ai_guardian_inline_markup():
         [
             InlineKeyboardButton("📋 Ver Parecer", callback_data="unk_ai:verdict"),
             InlineKeyboardButton("🔄 Atualizar", callback_data="unk_ai:refresh"),
+        ],
+        [
+            InlineKeyboardButton("🏦 Ir para Menu da Corretora", callback_data="unk_ex:refresh"),
         ],
     ])

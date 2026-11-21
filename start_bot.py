@@ -156,6 +156,7 @@ WELCOME_PT_BR = (
     "✅ *Robô Ativo:* Monitorando oportunidades em tempo real\n"
     "🏦 *Corretora:* Kraken (`Pares USD` | `RenderQuantV1` `15m`)\n"
     "🛡️ *Modo:* Simulação (`Dry-Run` — Carteira Virtual: `1000 USD`)\n"
+    "🧠 *Guardião IA:* Claude Fable 5.1 Ativo (`/ia` ou toque em 🧠 Guardião IA)\n"
     "⚡ *Proteção de Capital:* Ativa (`KER` + `Trailing Stop Pós-Taxas`)\n\n"
     "👇 *Toque nos botões abaixo para controlar o robô:*"
 )
@@ -709,6 +710,7 @@ def build_corretora_inline_rows() -> list[list[tuple[str, str]]]:
         [("🟢 KuCoin", "unk_ex:kucoin"), ("🟡 Binance", "unk_ex:binance")],
         [("🔑 API Key", "unk_input:api_key"), ("🔐 API Secret", "unk_input:api_secret"), ("🗝️ Passphrase", "unk_input:passphrase")],
         [("🛡️ Modo Simulado", "unk_mode:dry"), ("🚀 Conta Real", "unk_mode:live")],
+        [("🧠 Guardião IA (Claude Fable)", "unk_ai:open")],
         [("🗑️ Limpar Chaves", "unk_api:clear"), ("🔄 Atualizar", "unk_ex:refresh")],
     ]
 
@@ -726,10 +728,17 @@ def format_corretora_text() -> str:
     modo = "Simulação (Dry-Run)" if st["dry_run"] else "Conta Real"
     ts = time.strftime("%H:%M:%S")
     stop_nativo = "🟢 ATIVO no Livro (60s)" if st.get("stoploss_on_exchange") else "🟡 Stop Local (Monitorado pelo Bot)"
+    try:
+        from user_data.ai_guardian import get_state as _ai_st
+        s_ai = _ai_st()
+        ai_status = "🟢 ATIVADA (Claude Fable 5.1)" if s_ai.get("enabled", False) else "🔴 PAUSADA"
+    except Exception:
+        ai_status = "🟢 ATIVADA (Claude Fable 5.1)"
     return (
         f"🏦 *Configuração da Corretora & API*\n\n"
         f"• *Corretora atual:* `{st['exchange'].upper()}`\n"
         f"• *Modo:* {modo}\n"
+        f"• *Guardião IA:* {ai_status}\n"
         f"• *Stop-Loss Nativo:* {stop_nativo}\n"
         f"• *API Key:* `{st['key_masked']}`\n"
         f"• *API Secret:* `{st['secret_masked']}`\n"
@@ -1707,6 +1716,7 @@ async def setup_telegram_menu() -> None:
 
     cmds = [
         BotCommand("start", "Painel principal em Portugues"),
+        BotCommand("ia", "Guardião IA Claude Fable (Ativar/Pausar)"),
         BotCommand("estrategia", "Mudar estrategia de operacao"),
         BotCommand("status", "Ver operacoes abertas"),
         BotCommand("why", "Diagnostico do motivo de nao entrar"),
@@ -1721,6 +1731,7 @@ async def setup_telegram_menu() -> None:
         BotCommand("stop", "Pausar robo"),
         BotCommand("reload_config", "Recarregar configuracao"),
         BotCommand("corretora", "Configurar corretora e chaves API"),
+        BotCommand("guardian", "Controle do Guardiao IA Fable"),
         BotCommand("help", "Guia completo em Portugues"),
     ]
     await bot.set_my_commands(cmds)
