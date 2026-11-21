@@ -69,6 +69,7 @@ class RenderQuantV1(IStrategy):
     KER_MIN_V1: float = 0.35               # Filtro de eficiência para modo V1 (veto de chop/ruído)
     KER_MIN_V2: float = 0.42               # Filtro de eficiência para modo V2 Institucional
     portfolio_heat_limit: float = 0.03     # Hard cap de 3.0% de risco total aberto agregado sobre o equity
+    min_24h_volume_usd: float = 2_000_000.0 # Mínimo $2M USD negociados nas últimas 24h (anti-slippage)
 
     # Clusters de Correlação (HyperGrok) - Evita risco direcional duplicado nos 6 pares líquidos
     CORRELATION_CLUSTERS = {
@@ -240,6 +241,11 @@ class RenderQuantV1(IStrategy):
         safe_ker_vol = ker_vol.replace(0, np.nan)
         dataframe["ker"] = (ker_dir / safe_ker_vol).clip(lower=0.0, upper=1.0).fillna(0.0).astype(np.float32)
 
+        # 9. Liquidez Financeira Rolante 24h (Anti-Slippage - Claude Fable 5.1)
+        # 96 velas de 15m = 24h
+        vol_notional_24h = (dataframe["volume"] * close).rolling(96, min_periods=16).sum()
+        dataframe["volume_usd_24h"] = vol_notional_24h.fillna(0.0).astype(np.float32)
+
         return dataframe
 
     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
@@ -307,6 +313,9 @@ class RenderQuantV1(IStrategy):
         active_ker_min = self.KER_MIN_V2 if is_v2 else self.KER_MIN_V1
         ker_ok = dataframe["ker"] >= active_ker_min
 
+        # 7. Filtro de Liquidez Notional 24h (Elimina slippage em livros rasos - Claude Fable 5.1)
+        liquidity_ok = dataframe["volume_usd_24h"] >= self.min_24h_volume_usd
+
         # Condição de Entrada Composta
         entry_conditions = (
             minervini_ok
@@ -315,6 +324,7 @@ class RenderQuantV1(IStrategy):
             & regime_ok
             & momentum_ok
             & ker_ok
+            & liquidity_ok
             & (dataframe["volume"] > 0)
         )
 
