@@ -705,6 +705,34 @@ def update_exchange_config(
 
 
 
+def _get_telegram_inline_classes():
+    try:
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        return InlineKeyboardButton, InlineKeyboardMarkup
+    except ImportError:
+        class InlineKeyboardButton:
+            def __init__(self, text, callback_data=None, url=None):
+                self.text = text
+                self.callback_data = callback_data
+                self.url = url
+        class InlineKeyboardMarkup:
+            def __init__(self, inline_keyboard):
+                self.inline_keyboard = inline_keyboard
+        return InlineKeyboardButton, InlineKeyboardMarkup
+
+
+def build_main_menu_inline_markup():
+    InlineKeyboardButton, InlineKeyboardMarkup = _get_telegram_inline_classes()
+
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🧠 Guardião IA (Claude Fable)", callback_data="unk_ai:open")],
+        [InlineKeyboardButton("🏦 Corretora / API", callback_data="unk_ex:refresh"), InlineKeyboardButton("🎯 Estratégia", callback_data="unk_strat:refresh")],
+        [InlineKeyboardButton("📊 Operações Abertas", callback_data="unk_nav:status"), InlineKeyboardButton("💰 Lucros", callback_data="unk_nav:profit")],
+        [InlineKeyboardButton("❓ Por Que Não Entrou?", callback_data="unk_nav:why"), InlineKeyboardButton("🩺 Diagnóstico", callback_data="unk_nav:diag")],
+        [InlineKeyboardButton("🔄 Recarregar Painel", callback_data="unk_nav:menu")],
+    ])
+
+
 def build_corretora_inline_rows() -> list[list[tuple[str, str]]]:
     return [
         [("🟣 Kraken", "unk_ex:kraken"), ("🟠 Bybit", "unk_ex:bybit"), ("⚫ OKX", "unk_ex:okx")],
@@ -712,12 +740,12 @@ def build_corretora_inline_rows() -> list[list[tuple[str, str]]]:
         [("🔑 API Key", "unk_input:api_key"), ("🔐 API Secret", "unk_input:api_secret"), ("🗝️ Passphrase", "unk_input:passphrase")],
         [("🛡️ Modo Simulado", "unk_mode:dry"), ("🚀 Conta Real", "unk_mode:live")],
         [("🧠 Guardião IA (Claude Fable)", "unk_ai:open")],
-        [("🗑️ Limpar Chaves", "unk_api:clear"), ("🔄 Atualizar", "unk_ex:refresh")],
+        [("🗑️ Limpar Chaves", "unk_api:clear"), ("🔄 Atualizar", "unk_ex:refresh"), ("🏠 Menu", "unk_nav:menu")],
     ]
 
 
 def build_corretora_inline_markup():
-    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    InlineKeyboardButton, InlineKeyboardMarkup = _get_telegram_inline_classes()
 
     return InlineKeyboardMarkup(
         [[InlineKeyboardButton(text=t, callback_data=cb) for t, cb in row] for row in build_corretora_inline_rows()]
@@ -1322,13 +1350,12 @@ def install_pt_br_hooks() -> None:
                 parse_mode="Markdown",
             )
             return
-        from telegram import ReplyKeyboardMarkup
-        markup = ReplyKeyboardMarkup(PT_BR_KEYBOARD, resize_keyboard=True, is_persistent=True)
+        inline_markup = build_main_menu_inline_markup()
         msg_func = update.message.reply_text if update.message else update.effective_chat.send_message
         await msg_func(
             WELCOME_PT_BR,
             parse_mode="Markdown",
-            reply_markup=markup,
+            reply_markup=inline_markup,
         )
 
     async def _cmd_corretora(update, context):
@@ -1367,6 +1394,38 @@ def install_pt_br_hooks() -> None:
             pending_input.pop(cid, None)
             await q.edit_message_text("❌ Entrada cancelada.")
             return
+        if data.startswith("unk_nav:"):
+            sub = data.split(":", 1)[1]
+            if sub == "menu":
+                try:
+                    await q.edit_message_text(
+                        WELCOME_PT_BR,
+                        parse_mode="Markdown",
+                        reply_markup=build_main_menu_inline_markup(),
+                    )
+                except Exception:
+                    pass
+                return
+            elif sub == "status":
+                if tg and hasattr(tg, "_status"):
+                    try:
+                        await tg._status(update, context)
+                    except Exception:
+                        pass
+                return
+            elif sub == "profit":
+                if tg and hasattr(tg, "_profit"):
+                    try:
+                        await tg._profit(update, context)
+                    except Exception:
+                        pass
+                return
+            elif sub == "why":
+                await _cmd_why(update, context)
+                return
+            elif sub == "diag":
+                await _cmd_diag(update, context)
+                return
         if data.startswith("unk_input:"):
             field = data.split(":", 1)[1]
             pending_input[cid] = (field, time.monotonic())
@@ -1725,6 +1784,7 @@ def install_pt_br_hooks() -> None:
             registered_apps.add(app_id)
             orig_add_handler(self, CallbackQueryHandler(_cb_unkiorra, pattern=r"^unk_"), group=-1)
             orig_add_handler(self, CommandHandler("start", _cmd_start_panel), group=-1)
+            orig_add_handler(self, CommandHandler("menu", _cmd_start_panel), group=-1)
             orig_add_handler(self, CommandHandler("corretora", _cmd_corretora), group=-1)
             orig_add_handler(self, CommandHandler("ia", _cmd_ai_guardian), group=-1)
             orig_add_handler(self, CommandHandler("ai", _cmd_ai_guardian), group=-1)
@@ -1765,8 +1825,10 @@ async def setup_telegram_menu() -> None:
         print(f"[telegram] Alerta ao conectar na API do Telegram: {exc}", flush=True)
 
     cmds = [
+        BotCommand("menu", "Menu principal interativo com botoes"),
         BotCommand("start", "Painel principal em Portugues"),
         BotCommand("ia", "Guardião IA Claude Fable (Ativar/Pausar)"),
+        BotCommand("corretora", "Configurar corretora e chaves API"),
         BotCommand("estrategia", "Mudar estrategia de operacao"),
         BotCommand("status", "Ver operacoes abertas"),
         BotCommand("why", "Diagnostico do motivo de nao entrar"),
@@ -1780,19 +1842,16 @@ async def setup_telegram_menu() -> None:
         BotCommand("whitelist", "Moedas monitoradas"),
         BotCommand("stop", "Pausar robo"),
         BotCommand("reload_config", "Recarregar configuracao"),
-        BotCommand("corretora", "Configurar corretora e chaves API"),
         BotCommand("guardian", "Controle do Guardiao IA Fable"),
         BotCommand("help", "Guia completo em Portugues"),
     ]
     await bot.set_my_commands(cmds)
-    markup = ReplyKeyboardMarkup(
-        PT_BR_KEYBOARD, resize_keyboard=True, is_persistent=True
-    )
+    inline_markup = build_main_menu_inline_markup()
     msg = await bot.send_message(
         chat_id=CHAT_ID,
         text=WELCOME_PT_BR,
         parse_mode="Markdown",
-        reply_markup=markup,
+        reply_markup=inline_markup,
     )
     print("PT-BR_MENU_SENT message_id=", msg.message_id, flush=True)
     try:

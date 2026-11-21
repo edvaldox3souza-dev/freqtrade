@@ -416,5 +416,6 @@ def build_ai_guardian_inline_markup():
         ],
         [
             InlineKeyboardButton("🏦 Ir para Menu da Corretora", callback_data="unk_ex:refresh"),
+            InlineKeyboardButton("🏠 Menu Principal", callback_data="unk_nav:menu"),
         ],
     ])
