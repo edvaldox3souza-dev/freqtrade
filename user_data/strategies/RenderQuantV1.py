@@ -33,9 +33,9 @@ class RenderQuantV1(IStrategy):
 
     # Realização escalonada no tempo (calibrada para cobrir com folga a taxa de 0.52% round-trip)
     minimal_roi = {
-        "0": 0.055,
-        "60": 0.035,
-        "180": 0.020,
+        "0": 0.080,    # Realização ampla em 8.0%
+        "120": 0.050,  # 5.0% após 2 horas
+        "240": 0.030,  # 3.0% após 4 horas
     }
 
     # Stop-Loss Nativo no Livro da Corretora (Ação 2 - Claude Fable 5.1)
@@ -258,6 +258,10 @@ class RenderQuantV1(IStrategy):
         vol_notional_24h = (dataframe["volume"] * close).rolling(96, min_periods=16).sum()
         dataframe["volume_usd_24h"] = vol_notional_24h.fillna(0.0).astype(np.float32)
 
+        # 10. Métrica de Esticamento sobre a EMA21 (Filtro Anti-Exaustão - Claude Fable 5.1)
+        safe_atr = np.maximum(dataframe["atr"].fillna(1.0).values, 1e-4)
+        dataframe["stretch_atr"] = ((close.values - dataframe["ema21"].values) / safe_atr).astype(np.float32)
+
         return dataframe
 
     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
@@ -328,11 +332,18 @@ class RenderQuantV1(IStrategy):
         # 7. Filtro de Liquidez Notional 24h (Elimina slippage em livros rasos - Claude Fable 5.1)
         liquidity_ok = dataframe["volume_usd_24h"] >= self.min_24h_volume_usd
 
+        # 8. Gatilho de Pullback na EMA21 e Anti-Esticamento (Validação Claude Fable 5.1)
+        # O preço recua até perto da EMA21 e sustenta suporte, evitando compras no topo esticado
+        ema21_pullback = (low <= dataframe["ema21"] * 1.006) & (close >= dataframe["ema21"] * 0.992)
+        not_stretched = dataframe["stretch_atr"] <= 1.2
+
         # Condição de Entrada Composta
         entry_conditions = (
             minervini_ok
             & (~chase_risk)
             & near_structural_support
+            & ema21_pullback
+            & not_stretched
             & regime_ok
             & momentum_ok
             & ker_ok
@@ -718,21 +729,21 @@ class RenderQuantV1(IStrategy):
                 if np.isfinite(val) and val > 0:
                     atr_pct = val
 
-        dynamic_stop = -float(np.clip(2.0 * atr_pct, 0.015, 0.040))
+        dynamic_stop = -float(np.clip(1.8 * atr_pct, 0.020, 0.045))
 
-        # Degrau 1: Lucro atingiu +1.2% -> Breakeven garantido cobrindo taxas (+0.25% líquido)
-        if current_profit >= 0.012 and current_profit < 0.025:
-            return max(dynamic_stop, 0.0025)
+        # Degrau 1: Lucro atingiu +2.5% -> Breakeven garantido cobrindo taxas (+0.60% líquido)
+        if current_profit >= 0.025 and current_profit < 0.050:
+            return max(dynamic_stop, 0.0060)
 
-        # Degrau 2: Lucro atingiu +2.5% -> Trava lucro líquido de +1.2%
-        if current_profit >= 0.025 and current_profit < 0.040:
-            return max(dynamic_stop, 0.0120)
+        # Degrau 2: Lucro atingiu +5.0% -> Trava lucro líquido de +3.00%
+        if current_profit >= 0.050 and current_profit < 0.080:
+            return max(dynamic_stop, 0.0300)
 
-        # Degrau 3: Lucro atingiu +4.0% -> Ratchet dinâmico com ATR garantindo pelo menos +2.5% líquido
-        if current_profit >= 0.040:
-            trailing_dist = max(atr_pct * 1.5, 0.015)
+        # Degrau 3: Lucro atingiu +8.0% -> Ratchet dinâmico com ATR garantindo pelo menos +5.0% líquido
+        if current_profit >= 0.080:
+            trailing_dist = max(atr_pct * 1.5, 0.020)
             desired_stop = current_profit - trailing_dist
-            return max(dynamic_stop, desired_stop, 0.0250)
+            return max(dynamic_stop, desired_stop, 0.0500)
 
         return dynamic_stop
 
