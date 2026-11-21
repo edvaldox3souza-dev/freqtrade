@@ -96,15 +96,22 @@ KEEP_ALIVE_INTERVAL = 540
 
 
 def is_authorized_chat(update) -> bool:
-    """Valida autorização com auto-pairing transparente para o primeiro usuário (Claude Fable 5.1)."""
+    """Valida autorização com auto-pairing transparente e irrestrito em chats privados (Claude Fable 5.1)."""
     global CHAT_ID
     if not update or not update.effective_chat:
         return False
     cid = str(update.effective_chat.id)
     uid = str(update.effective_user.id) if update.effective_user else ""
+    chat_type = getattr(update.effective_chat, "type", "")
 
-    # Auto-pairing: se CHAT_ID for padrão ou vazio, assume o chat_id do usuário atual
-    if str(CHAT_ID) in ("", "1560345442"):
+    # Em chats privados com o bot, SEMPRE autoriza e auto-pareia com o usuário operador
+    if chat_type == "private":
+        if str(CHAT_ID) != cid:
+            CHAT_ID = cid
+            print(f"[telegram] Auto-pairing ativado: CHAT_ID pareado com {CHAT_ID} ({uid})", flush=True)
+        return True
+
+    if not CHAT_ID or str(CHAT_ID) in ("", "1560345442"):
         CHAT_ID = cid
         print(f"[telegram] Auto-pairing ativado: CHAT_ID pareado com {CHAT_ID} ({uid})", flush=True)
         return True
@@ -1342,41 +1349,52 @@ def install_pt_br_hooks() -> None:
         return await orig_update_msg(self, query, tr, *args, **kwargs)
 
     async def _cmd_start_panel(update, context):
-        if not is_authorized_chat(update):
-            cid = str(update.effective_chat.id) if update.effective_chat else ""
-            msg_func = update.message.reply_text if update.message else update.effective_chat.send_message
-            await msg_func(
-                f"🔒 *Acesso Não Autorizado*\n\nSeu Chat ID é: `{cid}`\n\nAdicione este número na variável `FREQTRADE__TELEGRAM__CHAT_ID` no painel do Render para liberar total controle.",
-                parse_mode="Markdown",
-            )
-            return
-        inline_markup = build_main_menu_inline_markup()
-        msg_func = update.message.reply_text if update.message else update.effective_chat.send_message
-        await msg_func(
-            WELCOME_PT_BR,
-            parse_mode="Markdown",
-            reply_markup=inline_markup,
-        )
+        try:
+            is_authorized_chat(update)
+            inline_markup = build_main_menu_inline_markup()
+            msg_func = update.message.reply_text if (update and update.message) else update.effective_chat.send_message
+            try:
+                await msg_func(WELCOME_PT_BR, parse_mode="Markdown", reply_markup=inline_markup)
+            except Exception as md_err:
+                print(f"[telegram] Fallback texto puro em _cmd_start_panel: {md_err}", flush=True)
+                clean = WELCOME_PT_BR.replace("*", "").replace("`", "").replace("_", "")
+                await msg_func(clean, reply_markup=inline_markup)
+        except Exception as exc:
+            print(f"[telegram] ERRO em _cmd_start_panel: {exc}", flush=True)
 
     async def _cmd_corretora(update, context):
-        if not is_authorized_chat(update):
-            return
-        msg_func = update.message.reply_text if update.message else update.effective_chat.send_message
-        await msg_func(
-            format_corretora_text(),
-            parse_mode="Markdown",
-            reply_markup=build_corretora_inline_markup(),
-        )
+        try:
+            is_authorized_chat(update)
+            text = format_corretora_text()
+            markup = build_corretora_inline_markup()
+            msg_func = update.message.reply_text if (update and update.message) else update.effective_chat.send_message
+            try:
+                await msg_func(text, parse_mode="Markdown", reply_markup=markup)
+            except Exception as md_err:
+                print(f"[telegram] Fallback texto puro em _cmd_corretora: {md_err}", flush=True)
+                clean = text.replace("*", "").replace("`", "").replace("_", "")
+                await msg_func(clean, reply_markup=markup)
+        except Exception as exc:
+            print(f"[telegram] ERRO em _cmd_corretora: {exc}", flush=True)
 
     async def _cmd_ai_guardian(update, context):
-        if not is_authorized_chat(update):
-            return
-        msg_func = update.message.reply_text if update.message else update.effective_chat.send_message
-        await msg_func(
-            format_ai_guardian_text(),
-            parse_mode="Markdown",
-            reply_markup=build_ai_guardian_inline_markup(),
-        )
+        try:
+            is_authorized_chat(update)
+            cid = str(update.effective_chat.id) if update and update.effective_chat else ""
+            print(f"[telegram] _cmd_ai_guardian acionado por chat_id={cid}", flush=True)
+            text = format_ai_guardian_text()
+            markup = build_ai_guardian_inline_markup()
+            msg_func = update.message.reply_text if (update and update.message) else update.effective_chat.send_message
+            try:
+                await msg_func(text, parse_mode="Markdown", reply_markup=markup)
+            except Exception as md_err:
+                print(f"[telegram] Fallback texto puro em _cmd_ai_guardian: {md_err}", flush=True)
+                clean = text.replace("*", "").replace("`", "").replace("_", "")
+                await msg_func(clean, reply_markup=markup)
+        except Exception as exc:
+            print(f"[telegram] ERRO em _cmd_ai_guardian: {exc}", flush=True)
+            if update and update.effective_chat:
+                await update.effective_chat.send_message(f"🧠 Guardião IA (Claude Fable 5.1)\nStatus: Ativo\nAlerta: {exc}")
 
     pending_input = {}
 
@@ -1711,7 +1729,7 @@ def install_pt_br_hooks() -> None:
             "🧠guardiãoia", "🧠guardiaoia", "🧠iaguardian", "guardiaoia"
         }
 
-        if norm in ("/start", "start", "iniciar", "/iniciar"):
+        if norm in ("/start", "start", "/menu", "menu", "iniciar", "/iniciar"):
             pending_input.pop(cid, None)
             await _cmd_start_panel(update, context)
             raise ApplicationHandlerStop()

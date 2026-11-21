@@ -352,7 +352,8 @@ def format_ai_guardian_text() -> str:
         conv_v = int(last_v.get("conviccao", 0) * 100)
         motivo_v = last_v.get("motivo", "N/A")
         ts_v = last_v.get("ts", "")
-        last_str = f"{status_v} em `{pair_v}` ({conv_v}%) às `{ts_v}`\n↳ _{motivo_v}_"
+        safe_motivo = str(motivo_v).replace("_", " ").replace("*", "").replace("`", "'")
+        last_str = f"{status_v} em `{pair_v}` ({conv_v}%) às `{ts_v}`\n↳ _{safe_motivo}_"
     else:
         last_str = "_Aguardando primeiro sinal de entrada do robô..._"
 
