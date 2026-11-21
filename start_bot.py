@@ -729,8 +729,19 @@ def _get_telegram_inline_classes():
 def build_main_menu_inline_markup():
     InlineKeyboardButton, InlineKeyboardMarkup = _get_telegram_inline_classes()
 
+    # Quick-toggle do Guardião IA direto no menu principal (estado visível no próprio botão)
+    try:
+        from user_data.ai_guardian import get_state as _ai_qs
+        ai_on = bool(_ai_qs().get("enabled", False))
+        ai_quick = InlineKeyboardButton(
+            "🧠 Guardião IA: 🟢 LIGADO (desligar)" if ai_on else "🧠 Guardião IA: 🔴 DESLIGADO (ligar)",
+            callback_data="unk_ai:quick_toggle",
+        )
+    except Exception:
+        ai_quick = InlineKeyboardButton("🧠 Guardião IA (Fable)", callback_data="unk_ai:open")
+
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🧠 Guardião IA (Claude Fable)", callback_data="unk_ai:open")],
+        [ai_quick],
         [InlineKeyboardButton("🏦 Corretora / API", callback_data="unk_ex:refresh"), InlineKeyboardButton("🎯 Estratégia", callback_data="unk_strat:refresh")],
         [InlineKeyboardButton("📊 Operações Abertas", callback_data="unk_nav:status"), InlineKeyboardButton("💰 Lucros", callback_data="unk_nav:profit")],
         [InlineKeyboardButton("❓ Por Que Não Entrou?", callback_data="unk_nav:why"), InlineKeyboardButton("🩺 Diagnóstico", callback_data="unk_nav:diag")],
@@ -1497,9 +1508,15 @@ def install_pt_br_hooks() -> None:
                 test_ai_connection as _ai_test,
             )
             sub = data.split(":", 1)[1]
-            if sub == "toggle":
+            if sub == "toggle" or sub == "quick_toggle":
                 cur = _ai_get_state()
-                _ai_update_state(enabled=not cur.get("enabled", False))
+                new_enabled = not cur.get("enabled", False)
+                _ai_update_state(enabled=new_enabled)
+                status_txt = "🟢 LIGADO (veto cognitivo ativo)" if new_enabled else "🔴 DESLIGADO (bypass total)"
+                try:
+                    await q.message.reply_text(f"🧠 Guardião IA: {status_txt}")
+                except Exception:
+                    pass
             elif sub.startswith("conv:"):
                 try:
                     c_val = float(sub.split(":", 1)[1])
