@@ -85,6 +85,16 @@
   "telegram": {
     "enabled": false,
     "token": "",
-    "chat_id": ""
+    "chat_id": "",
+    "keyboard": [
+      ["🎯 Mudar Estratégia", "❓ Por Que Não?"],
+      ["📊 Operações Abertas", "💰 Resultados"],
+      ["💳 Saldo da Conta", "📈 Desempenho"],
+      ["📋 Pares Ativos", "🏆 Por Moeda"],
+      ["▶️ Iniciar Robô", "⏸️ Pausar Robô"],
+      ["🏦 Corretora", "🧠 Guardião IA"],
+      ["🩺 Diagnóstico", "⚙️ Configurações"],
+      ["❓ Ajuda (Guia)"]
+    ]
   }
 }

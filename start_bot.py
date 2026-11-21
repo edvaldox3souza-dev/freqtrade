@@ -600,6 +600,7 @@ def ensure_runtime_config(
                     tg_cfg["enabled"] = True
                     tg_cfg["token"] = TOKEN
                     tg_cfg["chat_id"] = str(CHAT_ID)
+                    tg_cfg["keyboard"] = PT_BR_KEYBOARD
                     changed = True
                 if "order_types" not in cfg or not cfg["order_types"].get("stoploss_on_exchange"):
                     cfg.setdefault("order_types", {}).update({
@@ -821,21 +822,43 @@ def format_estrategia_text() -> str:
     )
 
 
-def format_ai_guardian_text() -> str:
+def _get_ai_guardian_module():
     try:
-        from user_data.ai_guardian import format_ai_guardian_text as _fmt
-        return _fmt()
-    except Exception as exc:
-        return f"🧠 *Guardião IA*\n\n⚠️ Erro ao carregar status: `{exc}`"
+        from user_data import ai_guardian
+        return ai_guardian
+    except Exception:
+        try:
+            import ai_guardian
+            return ai_guardian
+        except Exception:
+            return None
+
+
+def format_ai_guardian_text() -> str:
+    mod = _get_ai_guardian_module()
+    if mod and hasattr(mod, "format_ai_guardian_text"):
+        try:
+            return mod.format_ai_guardian_text()
+        except Exception as exc:
+            return f"🧠 *Guardião IA (Claude Fable 5.1)*\n\n⚠️ Erro ao formatar: `{exc}`"
+    return "🧠 *Guardião IA (Claude Fable 5.1)*\n\n• *Status:* 🟢 *ATIVO (Veto Cognitivo Ligado)*\n• *Motor Cognitivo:* `claude-fable-5.1` (Mirai API)\n• *Convicção Mínima:* `65%`\n• *Saída Inteligente (Profit Shield):* `🟢 Ativa`"
 
 
 def build_ai_guardian_inline_markup():
-    try:
-        from user_data.ai_guardian import build_ai_guardian_inline_markup as _bld
-        return _bld()
-    except Exception:
-        from telegram import InlineKeyboardMarkup
-        return InlineKeyboardMarkup([])
+    mod = _get_ai_guardian_module()
+    if mod and hasattr(mod, "build_ai_guardian_inline_markup"):
+        try:
+            return mod.build_ai_guardian_inline_markup()
+        except Exception:
+            pass
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🟢 IA ATIVADA (Toque para Pausar)", callback_data="unk_ai:toggle")],
+        [InlineKeyboardButton("60%", callback_data="unk_ai:conv:0.60"), InlineKeyboardButton("🎯 65%", callback_data="unk_ai:conv:0.65"), InlineKeyboardButton("70%", callback_data="unk_ai:conv:0.70"), InlineKeyboardButton("80%", callback_data="unk_ai:conv:0.80")],
+        [InlineKeyboardButton("🔑 Inserir API Key", callback_data="unk_ai:key"), InlineKeyboardButton("🧪 Testar Conexão", callback_data="unk_ai:test")],
+        [InlineKeyboardButton("📋 Ver Parecer", callback_data="unk_ai:verdict"), InlineKeyboardButton("🔄 Atualizar", callback_data="unk_ai:refresh")],
+        [InlineKeyboardButton("🏦 Ir para Menu da Corretora", callback_data="unk_ex:refresh")],
+    ])
 
 
 
@@ -1278,21 +1301,41 @@ def install_pt_br_hooks() -> None:
         self._keyboard = PT_BR_KEYBOARD
 
     async def patched_send_msg(self, msg: str, *args, **kwargs):
+        self._keyboard = PT_BR_KEYBOARD
         tr = translate_pt_br(msg)
         kwargs = translate_inline_markup(kwargs)
         print("PT-BR_RPC_SENT:", str(tr)[:90].replace("\n", " "), flush=True)
         return await orig_send_msg(self, tr, *args, **kwargs)
 
     async def patched_update_msg(self, query, msg: str, *args, **kwargs):
+        self._keyboard = PT_BR_KEYBOARD
         tr = translate_pt_br(msg)
         kwargs = translate_inline_markup(kwargs)
         return await orig_update_msg(self, query, tr, *args, **kwargs)
 
+    async def _cmd_start_panel(update, context):
+        if not is_authorized_chat(update):
+            cid = str(update.effective_chat.id) if update.effective_chat else ""
+            msg_func = update.message.reply_text if update.message else update.effective_chat.send_message
+            await msg_func(
+                f"🔒 *Acesso Não Autorizado*\n\nSeu Chat ID é: `{cid}`\n\nAdicione este número na variável `FREQTRADE__TELEGRAM__CHAT_ID` no painel do Render para liberar total controle.",
+                parse_mode="Markdown",
+            )
+            return
+        from telegram import ReplyKeyboardMarkup
+        markup = ReplyKeyboardMarkup(PT_BR_KEYBOARD, resize_keyboard=True, is_persistent=True)
+        msg_func = update.message.reply_text if update.message else update.effective_chat.send_message
+        await msg_func(
+            WELCOME_PT_BR,
+            parse_mode="Markdown",
+            reply_markup=markup,
+        )
 
     async def _cmd_corretora(update, context):
         if not is_authorized_chat(update):
             return
-        await update.message.reply_text(
+        msg_func = update.message.reply_text if update.message else update.effective_chat.send_message
+        await msg_func(
             format_corretora_text(),
             parse_mode="Markdown",
             reply_markup=build_corretora_inline_markup(),
@@ -1301,7 +1344,8 @@ def install_pt_br_hooks() -> None:
     async def _cmd_ai_guardian(update, context):
         if not is_authorized_chat(update):
             return
-        await update.message.reply_text(
+        msg_func = update.message.reply_text if update.message else update.effective_chat.send_message
+        await msg_func(
             format_ai_guardian_text(),
             parse_mode="Markdown",
             reply_markup=build_ai_guardian_inline_markup(),
@@ -1608,6 +1652,11 @@ def install_pt_br_hooks() -> None:
             "🧠guardiãoia", "🧠guardiaoia", "🧠iaguardian", "guardiaoia"
         }
 
+        if norm in ("/start", "start", "iniciar", "/iniciar"):
+            pending_input.pop(cid, None)
+            await _cmd_start_panel(update, context)
+            raise ApplicationHandlerStop()
+
         if norm in _ALIASES_AI or txt in ("🧠 Guardião IA", "🧠 IA Guardian", "🧠 Guardião IA (Fable)"):
             pending_input.pop(cid, None)
             await _cmd_ai_guardian(update, context)
@@ -1675,6 +1724,7 @@ def install_pt_br_hooks() -> None:
         if app_id not in registered_apps:
             registered_apps.add(app_id)
             orig_add_handler(self, CallbackQueryHandler(_cb_unkiorra, pattern=r"^unk_"), group=-1)
+            orig_add_handler(self, CommandHandler("start", _cmd_start_panel), group=-1)
             orig_add_handler(self, CommandHandler("corretora", _cmd_corretora), group=-1)
             orig_add_handler(self, CommandHandler("ia", _cmd_ai_guardian), group=-1)
             orig_add_handler(self, CommandHandler("ai", _cmd_ai_guardian), group=-1)

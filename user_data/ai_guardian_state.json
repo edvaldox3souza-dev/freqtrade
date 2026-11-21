@@ -1,0 +1,20 @@
+{
+  "enabled": true,
+  "api_key": "sk-sNU4kc9k0F5g97VUVnpNLO9K7pL70mJIYHnkMgSbaz4X8TM7",
+  "endpoint": "https://api.miraiapi.com/v1/chat/completions",
+  "model": "claude-fable-5.1",
+  "min_conviccao": 0.65,
+  "last_verdict": {
+    "aprovado": true,
+    "conviccao": 0.8,
+    "motivo": "KER 0.52 indica tendência limpa, regime bull expansão, ATR moderado e drawdown baixo sustentam convicção alta.",
+    "origem": "ia",
+    "pair": "ETH/USD",
+    "ts": "16:57:59 UTC"
+  },
+  "total_queries": 2,
+  "total_vetoes": 1,
+  "total_approvals": 1,
+  "total_ai_exits": 0,
+  "enable_ai_exits": true
+}
