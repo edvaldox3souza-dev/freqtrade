@@ -1410,6 +1410,26 @@ def keep_alive() -> None:
             time.sleep(KEEP_ALIVE_INTERVAL if ok_once else 15)
 
 
+def install_sqlalchemy_neon_pool_hooks() -> None:
+    """Injeta pool_pre_ping e pool_recycle no SQLAlchemy contra cold-sleep do Neon (Claude Fable 5.1)."""
+    try:
+        import sqlalchemy
+
+        orig_create_engine = sqlalchemy.create_engine
+
+        def robust_create_engine(*args, **kwargs):
+            kwargs.setdefault("pool_pre_ping", True)
+            kwargs.setdefault("pool_recycle", 300)
+            kwargs.setdefault("pool_size", 5)
+            kwargs.setdefault("max_overflow", 10)
+            return orig_create_engine(*args, **kwargs)
+
+        sqlalchemy.create_engine = robust_create_engine
+        print("SQLAlchemy Neon resilient pool hooks installed (pool_pre_ping=True, pool_recycle=300)!", flush=True)
+    except Exception as exc:
+        print("SQLAlchemy pool hook warning:", exc, flush=True)
+
+
 def main() -> None:
     assert "Modo Simulação" in translate_pt_br("Dry run is enabled. All trades are simulated.")
     print("PT-BR_SELF_TEST_OK: All translations verified in container!", flush=True)
@@ -1422,6 +1442,7 @@ def main() -> None:
     threading.Thread(target=keep_alive, daemon=True).start()
     install_pt_br_hooks()
     install_web_pt_br_hooks()
+    install_sqlalchemy_neon_pool_hooks()
     print("Telegram & Web PT-BR translation hooks installed!", flush=True)
     from freqtrade.main import main as ft_main
 

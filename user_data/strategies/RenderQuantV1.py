@@ -70,11 +70,11 @@ class RenderQuantV1(IStrategy):
     KER_MIN_V2: float = 0.42               # Filtro de eficiência para modo V2 Institucional
     portfolio_heat_limit: float = 0.03     # Hard cap de 3.0% de risco total aberto agregado sobre o equity
 
-    # Clusters de Correlação (HyperGrok) - Evita risco direcional duplicado
+    # Clusters de Correlação (HyperGrok) - Evita risco direcional duplicado nos 6 pares líquidos
     CORRELATION_CLUSTERS = {
         "MAJORS": ["BTC/USD", "ETH/USD", "BTC/USDT", "ETH/USDT"],
-        "LAYER1": ["SOL/USD", "ADA/USD", "AVAX/USD", "NEAR/USD", "SUI/USD", "SOL/USDT", "ADA/USDT"],
-        "DEFI_INFRA": ["LINK/USD", "DOT/USD", "LINK/USDT", "DOT/USDT"],
+        "LAYER1": ["SOL/USD", "ADA/USD", "SOL/USDT", "ADA/USDT"],
+        "DEFI_INFRA": ["LINK/USD", "LINK/USDT"],
     }
     MAX_TRADES_PER_CLUSTER = 1
 
@@ -344,6 +344,26 @@ class RenderQuantV1(IStrategy):
                 total_balance = float(self.wallets.get_total_stake_amount())
             except Exception:
                 pass
+
+        # 0. Guarda Dura de Saldo Livre (Free Stake Buffer - Claude Fable 5.1)
+        # Rejeita a entrada se o custo da ordem exceder 98% do saldo livre disponível, prevenindo InsufficientFunds
+        try:
+            if self.wallets is not None:
+                free_stake = float(self.wallets.get_available_stake_amount())
+                order_cost = float(amount) * float(rate)
+                buffer_ratio = 0.98
+                limit = free_stake * buffer_ratio
+                if order_cost > limit:
+                    logger.warning(
+                        "RenderQuant [FREE STAKE VETO]: Custo da ordem ($%.2f) excede limite de segurança ($%.2f / 98%% de $%.2f livre). Entrada em %s rejeitada.",
+                        order_cost,
+                        limit,
+                        free_stake,
+                        pair,
+                    )
+                    return False
+        except Exception as exc:
+            logger.debug("RenderQuant: Falha ao verificar saldo livre disponível: %s", exc)
 
         if self.current_day_utc != today or self.start_of_day_equity is None:
             self.current_day_utc = today

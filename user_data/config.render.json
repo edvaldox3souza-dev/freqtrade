@@ -14,8 +14,8 @@
     "process_throttle_secs": 15
   },
   "unfilledtimeout": {
-    "entry": 10,
-    "exit": 10,
+    "entry": 3,
+    "exit": 3,
     "exit_timeout_count": 0,
     "unit": "minutes"
   },
@@ -38,7 +38,9 @@
     "name": "kraken",
     "key": "",
     "secret": "",
-    "ccxt_config": {},
+    "ccxt_config": {
+      "enableRateLimit": true
+    },
     "ccxt_async_config": {},
     "pair_whitelist": [
       "BTC/USD",
@@ -46,11 +48,7 @@
       "SOL/USD",
       "XRP/USD",
       "ADA/USD",
-      "AVAX/USD",
-      "LINK/USD",
-      "DOT/USD",
-      "NEAR/USD",
-      "SUI/USD"
+      "LINK/USD"
     ],
     "pair_blacklist": []
   },
