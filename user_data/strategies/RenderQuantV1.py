@@ -1,4 +1,7 @@
+import json
 import logging
+import pathlib
+import time
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -73,6 +76,42 @@ class RenderQuantV1(IStrategy):
 
     current_day_utc = None
     start_of_day_equity = None
+    _last_state_read_ts: float = 0.0
+    _cached_strategy_mode: str = "RenderQuantV1"
+
+    def _get_active_strategy_mode(self) -> str:
+        """Lê dinamicamente o arquivo de estado gravado pelo Telegram sem reiniciar o processo.
+
+        Fail-safe: em caso de arquivo indisponível ou leitura concorrente, mantém o modo padrão V1.
+        """
+        now = time.time()
+        if now - self._last_state_read_ts < 3.0:
+            return self._cached_strategy_mode
+
+        paths_to_check = [
+            pathlib.Path("/freqtrade/user_data/strategy_state.json"),
+            pathlib.Path("user_data/strategy_state.json"),
+        ]
+        for p in paths_to_check:
+            try:
+                if p.exists():
+                    raw = p.read_text(encoding="utf-8")
+                    data = json.loads(raw)
+                    mode = data.get("active_strategy", "RenderQuantV1")
+                    if mode in ("RenderQuantV1", "RenderQuantV2_Institutional"):
+                        if mode != self._cached_strategy_mode:
+                            logger.info(
+                                "RenderQuant [META-STRATEGY]: Modo ativo comutado em tempo real via Telegram -> %s",
+                                mode,
+                            )
+                        self._cached_strategy_mode = mode
+                        self._last_state_read_ts = now
+                        return mode
+            except Exception as exc:
+                logger.debug("RenderQuant: Leitura concorrente de strategy_state.json contornada: %s", exc)
+
+        self._last_state_read_ts = now
+        return self._cached_strategy_mode
 
     @property
     def protections(self) -> list[dict[str, Any]]:
@@ -162,6 +201,9 @@ class RenderQuantV1(IStrategy):
         if dataframe.empty:
             return dataframe
 
+        mode = self._get_active_strategy_mode()
+        is_v2 = (mode == "RenderQuantV2_Institutional")
+
         close = dataframe["close"]
         low = dataframe["low"]
         r1 = dataframe["pivot_r1"]
@@ -179,25 +221,40 @@ class RenderQuantV1(IStrategy):
         # 2. Filtro Anti-Chasing: não comprar em rompimento esticado sem reteste
         chase_risk = (close > r1) & (low.shift(1) > r1)
 
-        # 3. Pullback estrutural: próximo ao pivot central P, ao suporte S1 ou à banda inferior de Bollinger
-        near_structural_support = (
-            ((close - p).abs() / p <= 0.015)
-            | ((close - s1).abs() / s1 <= 0.015)
-            | (close <= dataframe["bb_lower"] * 1.006)
-        )
+        # 3. Pullback estrutural diferenciado por modo (V2 institucional exige maior rigor geométrico)
+        if is_v2:
+            # V2 Institucional: exige Whale Volume OU proximidade severa (<= 0.8%) de suporte
+            whale_condition = (dataframe["is_whale_vol"] == 1)
+            support_condition = (
+                ((close - p).abs() / p <= 0.008)
+                | ((close - s1).abs() / s1 <= 0.008)
+                | (close <= dataframe["bb_lower"] * 1.004)
+            )
+            near_structural_support = whale_condition | support_condition
+            active_min_adx = 20.0
+            active_rsi_max = 42.0
+        else:
+            # V1 Equilibrada: tolerância padrão (<= 1.5%)
+            near_structural_support = (
+                ((close - p).abs() / p <= 0.015)
+                | ((close - s1).abs() / s1 <= 0.015)
+                | (close <= dataframe["bb_lower"] * 1.006)
+            )
+            active_min_adx = self.min_adx       # 16.0
+            active_rsi_max = self.rsi_entry_max # 48.0
 
         # 4. Regime e Volatilidade
         regime_ok = (
             (dataframe["natr"] >= self.min_natr)
             & (dataframe["natr"] <= self.max_natr)
-            & (dataframe["adx"] >= self.min_adx)
+            & (dataframe["adx"] >= active_min_adx)
         )
 
         # 5. Momentum e Confirmação de Retomada
         momentum_ok = (
             (dataframe["dual_bullish"] == 1)
             & (dataframe["dual_conflict"] == 0)
-            & (dataframe["rsi"] <= self.rsi_entry_max)
+            & (dataframe["rsi"] <= active_rsi_max)
             & (dataframe["rsi"] > dataframe["rsi"].shift(1))
         )
 
@@ -212,6 +269,16 @@ class RenderQuantV1(IStrategy):
         )
 
         dataframe.loc[entry_conditions, "enter_long"] = 1
+        # Contrato imutável de entrada por trade (R1 Claude Fable 5.1):
+        if is_v2:
+            dataframe.loc[entry_conditions, "enter_tag"] = np.where(
+                dataframe.loc[entry_conditions, "is_whale_vol"] == 1,
+                "V2:whale_pullback",
+                "V2:support_pullback",
+            )
+        else:
+            dataframe.loc[entry_conditions, "enter_tag"] = "V1:equilibrada_pullback"
+
         return dataframe
 
     def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
@@ -333,6 +400,14 @@ class RenderQuantV1(IStrategy):
         **kwargs: Any,
     ) -> float:
         """Stressed Sizing + Multiplicador de Regime + Trava Kelly (N >= 100)."""
+        mode = self._get_active_strategy_mode()
+        is_v2 = (mode == "RenderQuantV2_Institutional")
+
+        # Parâmetros de risco calibrados conforme o modo ativo
+        active_risk_pct = 0.0075 if is_v2 else self.max_risk_pct_per_trade  # 0.75% vs 1.0%
+        active_stake_ratio = 0.08 if is_v2 else self.max_stake_ratio        # 8% vs 10%
+        lateral_multiplier = 0.65 if is_v2 else 0.75                       # -35% vs -25% em range
+
         total_wallet = max(float(max_stake), float(proposed_stake), 0.0)
         if self.wallets is not None:
             try:
@@ -347,7 +422,7 @@ class RenderQuantV1(IStrategy):
         taker_fees = (current_rate + stressed_stop) * self.taker_fee_pct
         stressed_dist = abs(current_rate - stressed_stop) + taker_fees
 
-        risk_budget = total_wallet * self.max_risk_pct_per_trade
+        risk_budget = total_wallet * active_risk_pct
         if stressed_dist > 0:
             units = risk_budget / stressed_dist
             calculated_stake = units * current_rate
@@ -360,7 +435,7 @@ class RenderQuantV1(IStrategy):
             if dataframe is not None and not dataframe.empty:
                 is_bull = bool(dataframe["market_regime_bull"].iloc[-1])
                 if not is_bull:
-                    calculated_stake *= 0.75  # Reduz 25% da exposição em regime lateral
+                    calculated_stake *= lateral_multiplier
 
         # 3. Ajuste por Quarter-Kelly estritamente para N >= 100 trades (elimina ruído estatístico)
         try:
@@ -378,12 +453,12 @@ class RenderQuantV1(IStrategy):
                     payoff = (sum(wins) / len(wins)) / (sum(losses) / len(losses))
                     full_kelly = win_rate - ((1.0 - win_rate) / payoff)
                     quarter_kelly = max(0.0, full_kelly * self.kelly_fraction)
-                    kelly_cap = total_wallet * min(self.max_stake_ratio, max(0.02, quarter_kelly))
+                    kelly_cap = total_wallet * min(active_stake_ratio, max(0.02, quarter_kelly))
                     calculated_stake = min(calculated_stake, kelly_cap)
         except Exception:
             pass
 
-        cap = min(calculated_stake, total_wallet * self.max_stake_ratio, float(max_stake))
+        cap = min(calculated_stake, total_wallet * active_stake_ratio, float(max_stake))
         if min_stake is not None and cap < float(min_stake):
             logger.warning(
                 "RenderQuant: Ordem ignorada em %s — stake calculado (%.4f) abaixo do min_stake da corretora (%.4f).",
@@ -404,7 +479,7 @@ class RenderQuantV1(IStrategy):
         after_fill: bool,
         **kwargs: Any,
     ) -> float:
-        """Stoploss Dinâmico baseado em 2x ATR + Ratchet Progressivo (cobrindo taxas reais)."""
+        """Stoploss Dinâmico baseado em ATR + Ratchet Progressivo (Contrato R1 Fable 5.1)."""
         atr_pct = 0.015
         if self.dp is not None:
             dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
@@ -415,9 +490,20 @@ class RenderQuantV1(IStrategy):
 
         dynamic_stop = -float(np.clip(2.0 * atr_pct, 0.015, 0.040))
 
-        # Trailing Ratchet contínuo calibrado para cobrir a taxa round-trip real (0.52%)
-        if current_profit >= 0.035:
-            return max(dynamic_stop, 0.012)   # Garante lucro líquido real de +1.2%
-        if current_profit >= 0.018:
-            return max(dynamic_stop, 0.001)   # Breakeven líquido garantido pós-taxas
+        # R1 Fable 5.1: O modo que ABRIU o trade governa o trailing do trade até o fechamento
+        is_v2_trade = bool(trade.enter_tag and "V2:" in trade.enter_tag)
+
+        if is_v2_trade:
+            # Trailing Ratchet V2 Institucional: proteção mais rápida de lucros líquidos
+            if current_profit >= 0.030:
+                return max(dynamic_stop, 0.015)   # Garante lucro líquido real de +1.5%
+            if current_profit >= 0.015:
+                return max(dynamic_stop, 0.002)   # Breakeven precoce (+0.2% cobrindo taxas)
+        else:
+            # Trailing Ratchet V1 Equilibrada: padrão
+            if current_profit >= 0.035:
+                return max(dynamic_stop, 0.012)   # Garante lucro líquido real de +1.2%
+            if current_profit >= 0.018:
+                return max(dynamic_stop, 0.001)   # Breakeven líquido garantido (+0.1%)
+
         return dynamic_stop
