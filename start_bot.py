@@ -95,18 +95,20 @@ TOKEN, CHAT_ID = _load_tg_creds()
 KEEP_ALIVE_INTERVAL = 540
 
 PT_BR_KEYBOARD = [
-    ["📊 Operações Abertas", "❓ Por Que Não Entrou?"],
-    ["💰 Lucros e Ganhos", "💳 Saldo da Conta"],
-    ["📈 Estatísticas", "🏆 Por Moeda"],
-    ["📋 Pares Ativos", "🎯 Alternar Estratégia"],
+    ["🎯 Mudar Estratégia", "❓ Por Que Não Entrou?"],
+    ["📊 Operações Abertas", "💰 Lucros e Ganhos"],
+    ["💳 Saldo da Conta", "📈 Estatísticas"],
+    ["📋 Pares Ativos", "🏆 Por Moeda"],
     ["▶️ Iniciar Robô", "⏸️ Pausar Robô"],
     ["🏦 Corretora / API", "🩺 Saúde do Robô"],
     ["🔄 Atualizar Config", "❓ Ajuda (Guia)"],
 ]
 
 PT_BR_BUTTON_MAP = {
-    "📊 Operações Abertas": "_status",
+    "🎯 Mudar Estratégia": "_unkiorra_estrategia",
+    "🎯 Alternar Estratégia": "_unkiorra_estrategia",
     "❓ Por Que Não Entrou?": "_unkiorra_why",
+    "📊 Operações Abertas": "_status",
     "💰 Lucros e Ganhos": "_profit",
     "💳 Saldo da Conta": "_balance",
     "📈 Estatísticas": "_stats",
@@ -114,7 +116,6 @@ PT_BR_BUTTON_MAP = {
     "📋 Pares Ativos": "_whitelist",
     "▶️ Iniciar Robô": "_start",
     "⏸️ Pausar Robô": "_stop",
-    "🎯 Alternar Estratégia": "_unkiorra_estrategia",
     "🔄 Atualizar Config": "_reload_config",
     "❓ Ajuda (Guia)": "_help",
     "🏦 Corretora / API": "_unkiorra_corretora",
@@ -1411,7 +1412,7 @@ def install_pt_br_hooks() -> None:
             pending_input.pop(cid, None)
             await _cmd_why(update, context)
             raise ApplicationHandlerStop()
-        if txt == "🎯 Alternar Estratégia":
+        if txt in ("🎯 Mudar Estratégia", "🎯 Alternar Estratégia"):
             pending_input.pop(cid, None)
             await _cmd_estrategia(update, context)
             raise ApplicationHandlerStop()
@@ -1479,6 +1480,7 @@ async def setup_telegram_menu() -> None:
     bot = Bot(token=TOKEN)
     cmds = [
         BotCommand("start", "Painel principal em Portugues"),
+        BotCommand("estrategia", "Mudar estrategia de operacao"),
         BotCommand("status", "Ver operacoes abertas"),
         BotCommand("why", "Diagnostico do motivo de nao entrar"),
         BotCommand("profit", "Ver resumo de lucros"),
