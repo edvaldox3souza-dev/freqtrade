@@ -179,6 +179,16 @@ class RenderQuantV1(IStrategy):
             },
         ]
 
+    def informative_pairs(self) -> list[tuple[str, str]]:
+        """Garante que o par do BTC sempre seja baixado para o Macro Regime Guard (Claude Fable 5.1)."""
+        stake = "USD"
+        try:
+            if hasattr(self, "config") and self.config:
+                stake = self.config.get("stake_currency", "USD")
+        except Exception:
+            pass
+        return [(f"BTC/{stake}", self.timeframe)]
+
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         if dataframe.empty:
             return dataframe
@@ -433,6 +443,43 @@ class RenderQuantV1(IStrategy):
             self.current_day_utc = today
             self.start_of_day_equity = total_balance
             logger.info("RenderQuant: Novo dia UTC iniciado (%s). Equity base: $%.2f", today, total_balance)
+
+        # 0. Filtro de Fricção: Spread Guard Dinâmico (Claude Fable 5.1)
+        if self.dp is not None:
+            try:
+                ticker = self.dp.ticker(pair)
+                if ticker and "bid" in ticker and "ask" in ticker and ticker["bid"] and ticker["bid"] > 0:
+                    bid = float(ticker["bid"])
+                    ask = float(ticker["ask"])
+                    spread = (ask - bid) / bid
+                    if spread > 0.0015:  # Veto se spread for superior a 0.15% (15 bps)
+                        logger.info("RenderQuant [SPREAD VETO]: %s com spread excessivo de %.3f%% (> 0.150%%)", pair, spread * 100)
+                        self._record_decision(pair, "REJECT", f"Spread excessivo no book ({spread*100:.3f}% > 0.150%)")
+                        return False
+            except Exception as exc:
+                logger.debug("RenderQuant: Falha ao verificar spread de %s: %s", pair, exc)
+
+        # 0.1 BTC Macro Regime Guard em Tempo Real (Claude Fable 5.1)
+        stake = "USD"
+        try:
+            if hasattr(self, "config") and self.config:
+                stake = self.config.get("stake_currency", "USD")
+        except Exception:
+            pass
+        btc_pair = f"BTC/{stake}"
+        if pair != btc_pair and self.dp is not None:
+            try:
+                btc_df, _ = self.dp.get_analyzed_dataframe(btc_pair, self.timeframe)
+                if btc_df is not None and not btc_df.empty:
+                    last_btc = btc_df.iloc[-1]
+                    btc_c = float(last_btc.get("close", 0.0))
+                    btc_e50 = float(last_btc.get("sma50", last_btc.get("ema50", 0.0)))
+                    if btc_c > 0 and btc_e50 > 0 and btc_c < btc_e50:
+                        logger.info("RenderQuant [BTC MACRO VETO]: %s bloqueado pois BTC ($%.0f) está abaixo da média de 50 ($%.0f)", pair, btc_c, btc_e50)
+                        self._record_decision(pair, "REJECT", f"Regime Macro: BTC abaixo da média de 50 ($ {btc_c:.0f} < $ {btc_e50:.0f})")
+                        return False
+            except Exception as exc:
+                logger.debug("RenderQuant: Falha não crítica na checagem do BTC Macro Guard: %s", exc)
 
         # 1. Validação do Circuit Breaker Diário (Cálculo robusto sem exceções silenciosas)
         try:
