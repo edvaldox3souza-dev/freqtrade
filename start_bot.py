@@ -1321,7 +1321,7 @@ def main() -> None:
         "--userdir",
         "/freqtrade/user_data",
         "--strategy",
-        "RenderQuantV1",
+        os.environ.get("FREQTRADE_STRATEGY", "RenderQuantV1"),
         "--db-url",
         db_url,
     ]
