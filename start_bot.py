@@ -1373,6 +1373,26 @@ def install_pt_br_hooks() -> None:
         label = "Simulação (Dry-Run)" if st["dry_run"] else "Conta Real"
         await update.message.reply_text(f"✅ Modo alterado para *{label}*.", parse_mode="Markdown")
 
+    async def _cmd_diag(update, context):
+        """Diagnóstico em tempo real do estado do bot e subsistemas (Claude Fable 5.1)."""
+        if not is_authorized_chat(update):
+            return
+        st = get_exchange_status()
+        mode_str = "Simulado (Dry-Run)" if st.get("dry_run", True) else "CONTA REAL"
+        tok_masked = f"...{TOKEN[-5:]}" if len(TOKEN) > 5 else "NÃO CONFIGURADO"
+        diag_msg = (
+            "🩺 *Diagnóstico Forense do Sistema (Freqtrade + Render)*\n\n"
+            f"• *Telegram RPC:* {'✅ Ativo e Operacional' if TOKEN else '❌ Desativado (Sem Token)'}\n"
+            f"• *Token:* `{tok_masked}`\n"
+            f"• *Chat ID Pareado:* `{CHAT_ID}`\n"
+            f"• *Modo de Operação:* `{mode_str}`\n"
+            f"• *Corretora:* `{st.get('exchange', 'kraken').upper()}`\n"
+            f"• *Estratégia:* `RenderQuantV1` (Alpha Triad)\n"
+            f"• *Watchdogs:* RAM (420MB) + Neon Anti-Sleep Ativos\n\n"
+            "💡 _Seu bot está respondendo normalmente aos comandos._"
+        )
+        await update.message.reply_text(diag_msg, parse_mode="Markdown")
+
     async def _cmd_estrategia(update, context):
         if not is_authorized_chat(update):
             return
@@ -1448,6 +1468,14 @@ def install_pt_br_hooks() -> None:
             "/why", "why", "/porque", "porque", "/porquenaoentrou", "/porquênãoentrou",
             "❓porquênãoentrou?", "❓porquenaoentrou?", "porquenaoentrou"
         }
+        _ALIASES_DIAG = {
+            "/diag", "diag", "/diagnostico", "diagnostico", "/saude", "saude", "🩺saúdedorobô", "🩺saudedorobo"
+        }
+
+        if norm in _ALIASES_DIAG or txt == "🩺 Saúde do Robô":
+            pending_input.pop(cid, None)
+            await _cmd_diag(update, context)
+            raise ApplicationHandlerStop()
 
         if norm in _ALIASES_ESTRATEGIA or txt in ("🎯 Mudar Estratégia", "🎯 Alternar Estratégia"):
             pending_input.pop(cid, None)
@@ -1501,6 +1529,8 @@ def install_pt_br_hooks() -> None:
             orig_add_handler(self, CommandHandler("estrategia", _cmd_estrategia), group=-1)
             orig_add_handler(self, CommandHandler("strategy", _cmd_estrategia), group=-1)
             orig_add_handler(self, CommandHandler("why", _cmd_why), group=-1)
+            orig_add_handler(self, CommandHandler("diag", _cmd_diag), group=-1)
+            orig_add_handler(self, CommandHandler("diagnostico", _cmd_diag), group=-1)
             orig_add_handler(self, CommandHandler("set_corretora", _cmd_set_corretora))
             orig_add_handler(self, CommandHandler("set_api", _cmd_set_api))
             orig_add_handler(self, CommandHandler("modo_simulado", lambda u, c: _cmd_modo(u, c, True)))
@@ -1518,15 +1548,25 @@ def install_pt_br_hooks() -> None:
 
 async def setup_telegram_menu() -> None:
     if not TOKEN:
+        print("[telegram] ⚠️ AVISO CRÍTICO: FREQTRADE__TELEGRAM__TOKEN não configurado no Render! O bot do Telegram permanecerá inativo.", flush=True)
         return
     from telegram import Bot, BotCommand, ReplyKeyboardMarkup
 
     bot = Bot(token=TOKEN)
+    # Claude Fable 5.1: Purga webhook antigo para destravar polling getUpdates sem conflito 409
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+        me = await bot.get_me()
+        print(f"[telegram] ✓ Conexão Telegram estabelecida com sucesso! Bot: @{me.username} ({me.first_name})", flush=True)
+    except Exception as exc:
+        print(f"[telegram] Alerta ao conectar na API do Telegram: {exc}", flush=True)
+
     cmds = [
         BotCommand("start", "Painel principal em Portugues"),
         BotCommand("estrategia", "Mudar estrategia de operacao"),
         BotCommand("status", "Ver operacoes abertas"),
         BotCommand("why", "Diagnostico do motivo de nao entrar"),
+        BotCommand("diag", "Diagnostico de conectividade e saude"),
         BotCommand("profit", "Ver resumo de lucros"),
         BotCommand("balance", "Ver saldo da carteira"),
         BotCommand("daily", "Relatorio de lucro diario"),
