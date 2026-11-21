@@ -2047,7 +2047,15 @@ def main() -> None:
     start_neon_heartbeat(db_url)
 
     os.environ["FREQTRADE__API_SERVER__LISTEN_PORT"] = os.environ.get("PORT", "10000")
-    # Correção P0: Remove --strategy do sys.argv para que o reload respeite runtime_config.json e a Meta-Strategy dinamicamente!
+    # Correção P0: Remove --strategy dinâmico, mas garante estratégia correta no boot
+    # via override explícito (precedência máxima do freqtrade), evitando fallback
+    # para SampleStrategy observado em produção. Reload posterior usa runtime_config
+    # (que o FIX 1 do ensure_runtime_config também força com a estratégia ativa).
+    try:
+        boot_strategy = os.environ.get("FREQTRADE_STRATEGY", "").strip() or get_strategy_state().get("active_strategy", "RenderQuantV3_Defensive")
+    except Exception:
+        boot_strategy = "RenderQuantV3_Defensive"
+    print("PT-BR_BOOT_STRATEGY_ARGV:", boot_strategy, flush=True)
     sys.argv = [
         "freqtrade",
         "trade",
@@ -2055,6 +2063,8 @@ def main() -> None:
         str(ensure_runtime_config()),
         "--userdir",
         "/freqtrade/user_data",
+        "--strategy",
+        boot_strategy,
         "--db-url",
         db_url,
     ]
