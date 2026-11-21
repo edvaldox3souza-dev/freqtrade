@@ -549,7 +549,13 @@ class RenderQuantV1(IStrategy):
         side: str,
         **kwargs: Any,
     ) -> float:
-        """Stressed Sizing + Multiplicador de Regime + Trava Kelly (N >= 100)."""
+        """Fase 1 (ml4t/skills): Volatility-Targeted Inverse Position Sizing.
+
+        Stake = risk_budget / stressed_dist_pct, onde a distância de stop é
+        proporcional à volatilidade realizada (ATR) do par, com custos reais
+        de corretora e slippage. Equaliza o risco em dólares de cada aposta.
+        Preserva travas institucionais: regime lateral, Quarter-Kelly (N >= 200) e cap de carteira.
+        """
         mode = self._get_active_strategy_mode()
         is_v2 = (mode == "RenderQuantV2_Institutional")
 
@@ -558,6 +564,7 @@ class RenderQuantV1(IStrategy):
         active_stake_ratio = 0.08 if is_v2 else self.max_stake_ratio        # 8% vs 10%
         lateral_multiplier = 0.65 if is_v2 else 0.75                       # -35% vs -25% em range
 
+        # 0. Wallet total (fallback defensivo)
         total_wallet = max(float(max_stake), float(proposed_stake), 0.0)
         if self.wallets is not None:
             try:
@@ -565,29 +572,42 @@ class RenderQuantV1(IStrategy):
             except Exception:
                 pass
 
-        # 1. Stressed Stop Distance com taxa real da Kraken (0.26% taker)
-        nominal_stop_rate = current_rate * (1.0 - abs(self.stoploss))
-        slip_usd = current_rate * (self.slip_floor_bps / 10000.0)
-        stressed_stop = nominal_stop_rate - slip_usd
-        taker_fees = (current_rate + stressed_stop) * self.taker_fee_pct
-        stressed_dist = abs(current_rate - stressed_stop) + taker_fees
+        # 1. Volatilidade realizada (ml4t/skills) -> distância de stop proporcional ao ruído real do ativo
+        atr_pct = 0.018  # fallback robusto (1.8%)
+        if self.dp is not None:
+            try:
+                dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+                if dataframe is not None and not dataframe.empty and "atr_pct" in dataframe.columns:
+                    raw_atr = float(dataframe["atr_pct"].iloc[-1])
+                    if np.isfinite(raw_atr) and raw_atr > 0:
+                        atr_pct = raw_atr
+            except Exception:
+                pass
 
+        vol_stop_pct = float(np.clip(atr_pct * 2.2, 0.020, 0.060))
+
+        # 2. Custos reais: taker na entrada + taker na saída + slippage
+        stressed_dist_pct = vol_stop_pct + (self.taker_fee_pct * 2.0) + (self.slip_floor_bps / 10000.0)
+
+        # 3. Sizing inverso (ml4t): orçamento de risco / distância estressada
         risk_budget = total_wallet * active_risk_pct
-        if stressed_dist > 0:
-            units = risk_budget / stressed_dist
-            calculated_stake = units * current_rate
+        if stressed_dist_pct > 0:
+            calculated_stake = risk_budget / stressed_dist_pct
         else:
             calculated_stake = proposed_stake
 
-        # 2. Multiplicador por Regime de Mercado (Maverick)
+        # 4a. Multiplicador por Regime de Mercado (lateral/bear reduz exposição - Maverick)
         if self.dp is not None:
-            dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
-            if dataframe is not None and not dataframe.empty:
-                is_bull = bool(dataframe["market_regime_bull"].iloc[-1])
-                if not is_bull:
-                    calculated_stake *= lateral_multiplier
+            try:
+                dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+                if dataframe is not None and not dataframe.empty:
+                    is_bull = bool(dataframe["market_regime_bull"].iloc[-1])
+                    if not is_bull:
+                        calculated_stake *= lateral_multiplier
+            except Exception:
+                pass
 
-        # 3. Ajuste por Quarter-Kelly estritamente para N >= 200 trades (Diretriz P0 Claude Fable 5.1)
+        # 4b. Quarter-Kelly estritamente para N >= 200 trades (Diretriz P0 Claude Fable 5.1 / HyperGrok)
         try:
             closed_trades = Trade.get_trades_proxy(is_open=False)
             profits = [
@@ -597,30 +617,39 @@ class RenderQuantV1(IStrategy):
             ]
             if len(profits) >= 200:
                 wins = [p for p in profits if p > 0]
-                losses = [abs(p) for p in profits if p < 0]
+                losses = [p for p in profits if p <= 0]
                 if wins and losses:
+                    p_win = len(wins) / len(profits)
                     avg_win = sum(wins) / len(wins)
-                    avg_loss = sum(losses) / len(losses)
+                    avg_loss = abs(sum(losses) / len(losses))
                     if avg_loss > 0:
-                        win_rate = len(wins) / len(profits)
-                        payoff = avg_win / avg_loss
-                        if payoff > 0:
-                            full_kelly = win_rate - ((1.0 - win_rate) / payoff)
-                            quarter_kelly = max(0.0, full_kelly * self.kelly_fraction)
-                            kelly_cap = total_wallet * min(active_stake_ratio, max(0.02, quarter_kelly))
-                            calculated_stake = min(calculated_stake, kelly_cap)
+                        b = avg_win / avg_loss
+                        kelly_f = p_win - (1.0 - p_win) / b
+                        quarter_kelly = max(0.0, kelly_f) * 0.25
+                        if quarter_kelly > 0:
+                            calculated_stake = min(
+                                calculated_stake,
+                                total_wallet * quarter_kelly,
+                            )
         except Exception:
             pass
 
+        # 4c. Cap máximo de carteira (8% V2 / 10% V1)
         cap = min(calculated_stake, total_wallet * active_stake_ratio, float(max_stake))
+
+        # 4d. Trava de min_stake da corretora
         if min_stake is not None and cap < float(min_stake):
             logger.warning(
-                "RenderQuant: Ordem ignorada em %s — stake calculado (%.4f) abaixo do min_stake da corretora (%.4f).",
+                "RenderQuant [MIN_STAKE VETO]: Ordem em %s descartada — stake calculado ($%.2f) abaixo do mínimo da corretora ($%.2f).",
                 pair,
                 cap,
                 float(min_stake),
             )
             return 0.0
+
+        if not np.isfinite(cap) or cap <= 0:
+            return 0.0
+
         return round(float(cap), 8)
 
     # Custo Kraken spot round-trip (0.26% * 2 + 0.10% spread = 0.62%)
