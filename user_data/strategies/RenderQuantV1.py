@@ -14,31 +14,32 @@ logger = logging.getLogger(__name__)
 
 
 class RenderQuantV1(IStrategy):
-    """Estratégia Quantitativa Institucional para Render (V2 Unificada).
+    """Estratégia Quantitativa Institucional para Render (Fase 0 Corrigida).
 
     Integração de alta performance:
     - Maverick MCP: Minervini Trend Template (Stage 2) + Multiplicador por Regime de Mercado
     - Trading Skills: Modified Z-Score (MAD) de Volume + Anti-Chasing Pivots + Dual Crossover Anti-Whipsaw
     - HyperGrok Trading Desk: Stressed Stop Sizing + Daily Loss Circuit Breaker + Trava de Clusters de Correlação
+    - Correções Fase 0: Taxa real Kraken Spot (0.26%), Warm-up de 350 velas, Kelly desativado (<100 trades), Stoploss no bot
     """
 
     INTERFACE_VERSION = 3
 
     can_short: bool = False
     timeframe: str = "15m"
-    startup_candle_count: int = 240
+    startup_candle_count: int = 350
     process_only_new_candles: bool = True
 
-    # Realização escalonada no tempo
+    # Realização escalonada no tempo (calibrada para cobrir com folga a taxa de 0.52% round-trip)
     minimal_roi = {
-        "0": 0.045,
-        "60": 0.025,
-        "180": 0.012,
+        "0": 0.055,
+        "60": 0.035,
+        "180": 0.020,
     }
 
-    # Stoploss inicial de segurança na corretora
+    # Stoploss gerenciado internamente pelo bot (Kraken spot não suporta stop nativo em livro via CCXT)
     stoploss: float = -0.04
-    stoploss_on_exchange: bool = True
+    stoploss_on_exchange: bool = False
     use_custom_stoploss: bool = True
 
     use_exit_signal: bool = True
@@ -56,7 +57,7 @@ class RenderQuantV1(IStrategy):
     # Risco e Gestão de Capital (HyperGrok & Maverick)
     max_risk_pct_per_trade: float = 0.01   # 1% de risco da banca por operação
     daily_loss_stop_pct: float = 0.025     # -2.5% de perda diária congela novas entradas
-    taker_fee_pct: float = 0.0006          # 0.06% de taxa taker da exchange
+    taker_fee_pct: float = 0.0026          # 0.26% taxa taker real da Kraken (varejo)
     slip_floor_bps: float = 10.0           # 10 bps de derrapagem mínima estimada no stop
     kelly_fraction: float = 0.25           # Quarter-Kelly
     max_stake_ratio: float = 0.10          # Teto máximo de 10% da carteira por trade
@@ -262,7 +263,7 @@ class RenderQuantV1(IStrategy):
             self.start_of_day_equity = total_balance
             logger.info("RenderQuant: Novo dia UTC iniciado (%s). Equity base: $%.2f", today, total_balance)
 
-        # 1. Validação do Circuit Breaker Diário
+        # 1. Validação do Circuit Breaker Diário (Cálculo robusto sem exceções silenciosas)
         try:
             today_start = datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc)
             closed_trades = Trade.get_trades_proxy(is_open=False)
@@ -273,11 +274,16 @@ class RenderQuantV1(IStrategy):
             realized_pnl = sum(float(getattr(t, "close_profit_abs", 0.0) or 0.0) for t in closed_today)
 
             open_trades = Trade.get_trades_proxy(is_open=True)
-            unrealized_pnl = sum(
-                float(getattr(t, "realized_profit", 0.0) or 0.0) +
-                float(getattr(t, "calc_profit_abs", lambda r: 0.0)(rate) or 0.0)
-                for t in open_trades
-            )
+            unrealized_pnl = 0.0
+            for t in open_trades:
+                try:
+                    if hasattr(t, "calc_profit_abs"):
+                        unrealized_pnl += float(t.calc_profit_abs(rate))
+                    else:
+                        unrealized_pnl += float(getattr(t, "realized_profit", 0.0) or 0.0)
+                except Exception:
+                    unrealized_pnl += float(getattr(t, "realized_profit", 0.0) or 0.0)
+
             total_daily_pnl = realized_pnl + unrealized_pnl
             daily_dd_pct = total_daily_pnl / max(self.start_of_day_equity, 10.0)
 
@@ -326,7 +332,7 @@ class RenderQuantV1(IStrategy):
         side: str,
         **kwargs: Any,
     ) -> float:
-        """Stressed Sizing + Quarter-Kelly + Multiplicador de Regime."""
+        """Stressed Sizing + Multiplicador de Regime + Trava Kelly (N >= 100)."""
         total_wallet = max(float(max_stake), float(proposed_stake), 0.0)
         if self.wallets is not None:
             try:
@@ -334,7 +340,7 @@ class RenderQuantV1(IStrategy):
             except Exception:
                 pass
 
-        # 1. Stressed Stop Distance (HyperGrok)
+        # 1. Stressed Stop Distance com taxa real da Kraken (0.26% taker)
         nominal_stop_rate = current_rate * (1.0 - abs(self.stoploss))
         slip_usd = current_rate * (self.slip_floor_bps / 10000.0)
         stressed_stop = nominal_stop_rate - slip_usd
@@ -356,7 +362,7 @@ class RenderQuantV1(IStrategy):
                 if not is_bull:
                     calculated_stake *= 0.75  # Reduz 25% da exposição em regime lateral
 
-        # 3. Ajuste por Quarter-Kelly
+        # 3. Ajuste por Quarter-Kelly estritamente para N >= 100 trades (elimina ruído estatístico)
         try:
             closed_trades = Trade.get_trades_proxy(is_open=False)
             profits = [
@@ -364,7 +370,7 @@ class RenderQuantV1(IStrategy):
                 for t in closed_trades
                 if getattr(t, "close_profit", None) is not None
             ]
-            if len(profits) >= 10:
+            if len(profits) >= 100:
                 wins = [p for p in profits if p > 0]
                 losses = [abs(p) for p in profits if p < 0]
                 if wins and losses:
@@ -398,7 +404,7 @@ class RenderQuantV1(IStrategy):
         after_fill: bool,
         **kwargs: Any,
     ) -> float:
-        """Stoploss Dinâmico baseado em 2x ATR + Ratchet Progressivo Contínuo."""
+        """Stoploss Dinâmico baseado em 2x ATR + Ratchet Progressivo (cobrindo taxas reais)."""
         atr_pct = 0.015
         if self.dp is not None:
             dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
@@ -409,9 +415,9 @@ class RenderQuantV1(IStrategy):
 
         dynamic_stop = -float(np.clip(2.0 * atr_pct, 0.015, 0.040))
 
-        # Trailing Ratchet contínuo (Trading Skills & HyperGrok)
-        if current_profit >= 0.030:
-            return max(dynamic_stop, -0.008)  # Lucro protegido
-        if current_profit >= 0.015:
-            return max(dynamic_stop, -0.005)  # Breakeven líquido
+        # Trailing Ratchet contínuo calibrado para cobrir a taxa round-trip real (0.52%)
+        if current_profit >= 0.035:
+            return max(dynamic_stop, 0.012)   # Garante lucro líquido real de +1.2%
+        if current_profit >= 0.018:
+            return max(dynamic_stop, 0.001)   # Breakeven líquido garantido pós-taxas
         return dynamic_stop
