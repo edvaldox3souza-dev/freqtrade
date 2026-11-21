@@ -3,7 +3,7 @@ import logging
 import pathlib
 import time
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Optional, Union
 
 import numpy as np
 import talib.abstract as ta
@@ -735,6 +735,81 @@ class RenderQuantV1(IStrategy):
             return max(dynamic_stop, desired_stop, 0.0250)
 
         return dynamic_stop
+
+    # Cache de rate-limit para chamadas de saída da IA (máx 1 consulta a cada 15m por par)
+    _last_ai_exit_check: dict[str, float] = {}
+
+    def custom_exit(
+        self,
+        pair: str,
+        trade: Trade,
+        current_time: datetime,
+        current_rate: float,
+        current_profit: float,
+        **kwargs: Any,
+    ) -> Optional[Union[str, bool]]:
+        """
+        Saída Cognitiva Inteligente com Claude Fable 5.1 (Mirai API).
+        Avalia encerramento antecipado para embolsar lucros ou cortar estagnação antes de reversão.
+        Possui rate-limit estrito de 15 minutos por par para latência zero e custo controlado.
+        """
+        trade_open_date = getattr(trade, "open_date_utc", None)
+        open_minutes = 0.0
+        if trade_open_date:
+            try:
+                # normaliza datetime com timezone se necessário
+                t_diff = (current_time - trade_open_date).total_seconds()
+                open_minutes = max(0.0, t_diff / 60.0)
+            except Exception:
+                pass
+
+        qualifies_profit_shield = (current_profit >= 0.012)
+        qualifies_stagnation_cut = (open_minutes >= 90.0 and current_profit < 0.005)
+
+        if not (qualifies_profit_shield or qualifies_stagnation_cut):
+            return None
+
+        # Rate limit rigoroso: no máximo 1 consulta a cada 900 segundos (15 minutos) por par
+        now_ts = time.time()
+        last_check = self._last_ai_exit_check.get(pair, 0.0)
+        if (now_ts - last_check) < 900.0:
+            return None
+
+        # Coleta dados técnicos atuais do par
+        ker_val = 0.40
+        atr_val = 0.018
+        regime_bull_val = True
+        if self.dp is not None:
+            dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+            if dataframe is not None and not dataframe.empty:
+                last_row = dataframe.iloc[-1]
+                ker_val = float(last_row.get("ker", 0.40))
+                atr_val = float(last_row.get("atr_pct", 0.018))
+                regime_bull_val = bool(last_row.get("market_regime_bull", True))
+
+        self._last_ai_exit_check[pair] = now_ts
+
+        try:
+            from user_data.ai_guardian import consult_ai_exit
+            verdict = consult_ai_exit(
+                pair=pair,
+                current_profit_pct=current_profit,
+                open_duration_min=open_minutes,
+                ker=ker_val,
+                atr_pct=atr_val,
+                regime_bull=regime_bull_val,
+            )
+            if verdict.get("sair", False):
+                reason = verdict.get("motivo", "IA Profit Shield")
+                logger.info(
+                    "RenderQuant [AI GUARDIAN EXIT]: Encerrando %s (Lucro: %+.2f%% | Duração: %.0fm) -> %s",
+                    pair, current_profit * 100, open_minutes, reason
+                )
+                return f"ia_fable_{reason[:25].strip()}"
+        except Exception as exc:
+            logger.debug("RenderQuant: Erro não crítico no custom_exit da IA: %s", exc)
+
+        return None
 
     def get_risk_status(self) -> dict[str, Any]:
         """Snapshot quantitativo em tempo real para o Telegram e Painel Web (Claude Fable 5.1)."""

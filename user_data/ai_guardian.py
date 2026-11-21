@@ -29,6 +29,8 @@ DEFAULT_STATE = {
     "total_queries": 0,
     "total_vetoes": 0,
     "total_approvals": 0,
+    "total_ai_exits": 0,
+    "enable_ai_exits": True,
 }
 
 _STATE_LOCK = threading.RLock()
@@ -213,6 +215,88 @@ def consult_ai_guardian(
     return verdict
 
 
+def consult_ai_exit(
+    pair: str,
+    current_profit_pct: float,
+    open_duration_min: float,
+    ker: float,
+    atr_pct: float,
+    regime_bull: bool,
+) -> dict:
+    """
+    Consulta o Claude Fable 5.1 via Mirai API para avaliar encerramento antecipado de posição aberta.
+    Retorno garantido sem exceção:
+    {"sair": bool, "motivo": str, "origem": "ia" | "bypass" | "fallback"}
+    """
+    s = get_state()
+    if not s.get("enabled", False) or not s.get("enable_ai_exits", True):
+        return {"sair": False, "motivo": "IA de saída pausada", "origem": "bypass"}
+
+    api_key = s.get("api_key", "").strip()
+    endpoint = s.get("endpoint", "").strip()
+    model = s.get("model", "claude-fable-5.1")
+
+    if not api_key or not endpoint:
+        return {"sair": False, "motivo": "Sem chave configurada", "origem": "bypass"}
+
+    prompt_content = (
+        "Você é o Chief Risk Officer AI avaliando se deve ENCERRAR ANTECIPADAMENTE uma posição aberta no Freqtrade para embolsar lucro ou evitar reversão violenta.\n\n"
+        f"• Par: {pair}\n"
+        f"• Lucro Líquido Atual: {current_profit_pct*100:+.2f}%\n"
+        f"• Duração do Trade: {open_duration_min:.0f} minutos\n"
+        f"• KER Atual (Eficiência da Tendência): {ker:.4f} (Ruído < 0.25 | Tendência Limpa >= 0.35)\n"
+        f"• ATR Volatilidade: {atr_pct*100:.2f}%\n"
+        f"• Regime de Mercado: {'BULL EXPANSÃO' if regime_bull else 'LATERAL/CONSOLIDAÇÃO'}\n\n"
+        "Avalie se a posição deve ser encerrada AGORA (a mercado) para proteger lucro contra reversão ou cortar estagnação antes de virar prejuízo.\n"
+        "RESPONDA ESTRITAMENTE EM JSON VÁLIDO no seguinte formato (sem texto antes ou depois):\n"
+        '{"sair": true, "motivo": "Justificativa analítica concisa em até 15 palavras"}'
+    )
+
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt_content}],
+        "temperature": 0.1,
+        "max_tokens": 120,
+    }
+
+    try:
+        req_data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            endpoint,
+            data=req_data,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+                "User-Agent": "Freqtrade-AIGuardian/1.0",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=8.0) as resp:
+            raw_body = resp.read().decode("utf-8")
+            data = json.loads(raw_body)
+            content = data["choices"][0]["message"]["content"].strip()
+
+            json_match = re.search(r"\{.*\}", content, re.DOTALL)
+            if json_match:
+                parsed = json.loads(json_match.group(0))
+                sair = bool(parsed.get("sair", False))
+                motivo = str(parsed.get("motivo", "Encerramento recomendado pela IA"))
+
+                if sair:
+                    s["total_ai_exits"] = s.get("total_ai_exits", 0) + 1
+                    update_state(**s)
+
+                return {
+                    "sair": sair,
+                    "motivo": motivo,
+                    "origem": "ia",
+                }
+
+    except Exception as exc:
+        logger.debug("[AI GUARDIAN EXIT] Erro/Timeout na consulta de saída: %s", exc)
+
+    return {"sair": False, "motivo": "Fallback passivo (mantém ordens no livro)", "origem": "fallback"}
+
+
 def test_ai_connection() -> tuple[bool, str]:
     """Testa a conectividade da API com latência real medida em milissegundos."""
     s = get_state()
@@ -259,6 +343,7 @@ def format_ai_guardian_text() -> str:
     queries = s.get("total_queries", 0)
     approvals = s.get("total_approvals", 0)
     vetoes = s.get("total_vetoes", 0)
+    ai_exits = s.get("total_ai_exits", 0)
 
     last_v = s.get("last_verdict")
     if last_v and isinstance(last_v, dict):
@@ -279,7 +364,8 @@ def format_ai_guardian_text() -> str:
         f"• *Motor Cognitivo:* `{model}`\n"
         f"• *API Key:* `{key_masked}`\n"
         f"• *Convicção Mínima:* `{min_conv}%`\n"
-        f"• *Auditoria:* `{queries}` analisadas (`{approvals}` aprovadas | `{vetoes}` vetadas)\n\n"
+        f"• *Saída Inteligente (Profit Shield):* `🟢 Ativa (15m)`\n"
+        f"• *Auditoria:* `{queries}` analisadas (`{approvals}` aprovadas | `{vetoes}` vetadas | `{ai_exits}` saídas)\n\n"
         f"📋 *Último Parecer:* \n{last_str}\n\n"
         f"🕒 *Atualizado:* `{ts_now}`\n\n"
         f"👇 *Controle a IA em tempo real pelos botões abaixo:*"
