@@ -13,14 +13,15 @@ import uuid
 # =============================================================================
 # Bootstrap Seguro de Credenciais e AppSec (Claude Fable 5.1)
 # =============================================================================
-_DEFAULTS = {
-    "FREQTRADE__API_SERVER__PASSWORD": "kQ7~vT2mX_9rLp4W!bN8sH3dG6yF1jZa",
-    "FREQTRADE__API_SERVER__JWT_SECRET_KEY": (
-        "733b9da676eaedcce350d1ce96044085a7f1e4649ec822327f46a33e7bd1ccc0"
-    ),
-    "FREQTRADE__API_SERVER__WS_TOKEN": (
-        "84297312bd296883712f5f546ce5caec7f96fcf4b42728531956a15076428efa"
-    ),
+# P0-SECURITY: nenhum segredo hard-coded. Credenciais vêm exclusivamente de env vars.
+# Se ausentes, geramos um segredo aleatório por boot (fail-closed: senha desconhecida
+# invalida logins antigos em vez de aceitar um padrão público do repositório).
+_REQUIRED_SECRETS = (
+    "FREQTRADE__API_SERVER__PASSWORD",
+    "FREQTRADE__API_SERVER__JWT_SECRET_KEY",
+    "FREQTRADE__API_SERVER__WS_TOKEN",
+)
+_FIXED_DEFAULTS = {
     "FREQTRADE__API_SERVER__ENABLED": "true",
     "FREQTRADE__API_SERVER__LISTEN_IP_ADDRESS": "0.0.0.0",
 }
@@ -48,20 +49,25 @@ def _is_unsafe(value: str | None) -> bool:
 
 
 def _harden_environment() -> None:
+    import secrets as _secrets
+
     errors: list[str] = []
-    for key, default in _DEFAULTS.items():
+    for key, default in _FIXED_DEFAULTS.items():
+        if _is_unsafe(os.environ.get(key)):
+            os.environ[key] = default
+
+    for key in _REQUIRED_SECRETS:
         current = os.environ.get(key)
         if _is_unsafe(current):
-            os.environ[key] = default
-            print(f"[bootstrap] {key}: ausente/placeholder -> default blindado injetado.", flush=True)
-
-        final_value = os.environ[key]
-        min_len = _MIN_LEN.get(key)
-        if min_len and len(final_value) < min_len:
-            errors.append(f"{key} tem {len(final_value)} caracteres (mínimo {min_len}).")
+            generated = _secrets.token_urlsafe(48)
+            os.environ[key] = generated
+            print(f"[bootstrap] {key}: ausente/placeholder -> segredo aleatório gerado "
+                  f"(configure a env var no Render para credencial estável!).", flush=True)
+        elif key in _MIN_LEN and len(os.environ[key].strip()) < _MIN_LEN[key]:
+            errors.append(f"{key} tem {len(os.environ[key].strip())} caracteres (mínimo {_MIN_LEN[key]}).")
 
         if key in _MIN_LEN:
-            print(f"[bootstrap] {key}: {_fingerprint(final_value)}", flush=True)
+            print(f"[bootstrap] {key}: {_fingerprint(os.environ[key])}", flush=True)
 
     if errors:
         print("[bootstrap] FALHA DE SEGURANÇA — abortando:", file=sys.stderr, flush=True)
@@ -88,7 +94,7 @@ def _load_tg_creds():
                     cid = cid or str(tg.get("chat_id", ""))
             except Exception:
                 pass
-    return tok, cid or "1560345442"
+    return tok, cid.strip()
 
 
 TOKEN, CHAT_ID = _load_tg_creds()
@@ -96,27 +102,19 @@ KEEP_ALIVE_INTERVAL = 540
 
 
 def is_authorized_chat(update) -> bool:
-    """Valida autorização com auto-pairing transparente e irrestrito em chats privados (Claude Fable 5.1)."""
-    global CHAT_ID
+    """P0-SECURITY: somente o CHAT_ID configurado via env var é autorizado.
+
+    Sem auto-pairing: desconhecidos recebem o próprio chat_id como instrução
+    para configurar a variável no Render, e nada mais.
+    """
     if not update or not update.effective_chat:
         return False
     cid = str(update.effective_chat.id)
     uid = str(update.effective_user.id) if update.effective_user else ""
-    chat_type = getattr(update.effective_chat, "type", "")
-
-    # Em chats privados com o bot, SEMPRE autoriza e auto-pareia com o usuário operador
-    if chat_type == "private":
-        if str(CHAT_ID) != cid:
-            CHAT_ID = cid
-            print(f"[telegram] Auto-pairing ativado: CHAT_ID pareado com {CHAT_ID} ({uid})", flush=True)
-        return True
-
-    if not CHAT_ID or str(CHAT_ID) in ("", "1560345442"):
-        CHAT_ID = cid
-        print(f"[telegram] Auto-pairing ativado: CHAT_ID pareado com {CHAT_ID} ({uid})", flush=True)
-        return True
-
-    return cid == str(CHAT_ID) or uid == str(CHAT_ID)
+    allowed = str(CHAT_ID).strip() if CHAT_ID else ""
+    if not allowed:
+        return False
+    return cid == allowed or uid == allowed
 
 
 PT_BR_KEYBOARD = [
@@ -792,17 +790,16 @@ AVAILABLE_STRATEGIES = [
 
 
 def get_strategy_state() -> dict:
-    with _RUNTIME_CFG_LOCK:
-        if STRATEGY_STATE_PATH.exists():
-            try:
-                return json.loads(STRATEGY_STATE_PATH.read_text(encoding="utf-8"))
-            except Exception:
-                pass
-    active_env = os.environ.get("FREQTRADE_STRATEGY", "RenderQuantV1")
-    return {
-        "active_strategy": active_env,
+    from user_data.state_store import load_state
+    default = {
+        "active_strategy": os.environ.get("FREQTRADE_STRATEGY", "RenderQuantV1"),
         "updated_at": time.strftime("%H:%M:%S UTC"),
     }
+    data = load_state("strategy_state", [STRATEGY_STATE_PATH], default)
+    valid_names = {name for name, _ in AVAILABLE_STRATEGIES}
+    if data.get("active_strategy") not in valid_names:
+        data["active_strategy"] = default["active_strategy"]
+    return data
 
 
 def update_strategy_state(strat_name: str) -> dict:
@@ -811,8 +808,8 @@ def update_strategy_state(strat_name: str) -> dict:
         state["active_strategy"] = strat_name
         state["updated_at"] = time.strftime("%H:%M:%S UTC")
         try:
-            STRATEGY_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-            _atomic_write_text(STRATEGY_STATE_PATH, json.dumps(state, indent=2, ensure_ascii=False) + "\n")
+            from user_data.state_store import save_state
+            save_state("strategy_state", state, [STRATEGY_STATE_PATH])
         except Exception as exc:
             print("PT-BR_STRATEGY_STATE_WARN:", exc, flush=True)
 
@@ -1830,6 +1827,10 @@ def install_pt_br_hooks() -> None:
 async def setup_telegram_menu() -> None:
     if not TOKEN:
         print("[telegram] ⚠️ AVISO CRÍTICO: FREQTRADE__TELEGRAM__TOKEN não configurado no Render! O bot do Telegram permanecerá inativo.", flush=True)
+        return
+    if not str(CHAT_ID).strip():
+        print("[telegram] ⚠️ AVISO CRÍTICO: FREQTRADE__TELEGRAM__CHAT_ID não configurado! "
+              "Nenhuma mensagem de boot será enviada e nenhum comando será autorizado.", flush=True)
         return
     from telegram import Bot, BotCommand, ReplyKeyboardMarkup
 

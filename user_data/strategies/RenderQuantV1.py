@@ -119,12 +119,11 @@ class RenderQuantV1(IStrategy):
             "cluster": cluster,
             "mode": self._cached_strategy_mode,
         }
-        for path_target in [self.WHY_STATE_FILE, pathlib.Path("/freqtrade/user_data/why_state.json")]:
-            try:
-                path_target.parent.mkdir(parents=True, exist_ok=True)
-                path_target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-            except Exception:
-                pass
+        try:
+            from user_data.state_store import save_state
+            save_state("why_state", payload, [self.WHY_STATE_FILE, pathlib.Path("/freqtrade/user_data/why_state.json")])
+        except Exception:
+            pass
 
     def _get_active_strategy_mode(self) -> str:
         """Lê dinamicamente o arquivo de estado gravado pelo Telegram sem reiniciar o processo.
@@ -135,27 +134,28 @@ class RenderQuantV1(IStrategy):
         if now - self._last_state_read_ts < 3.0:
             return self._cached_strategy_mode
 
-        paths_to_check = [
-            pathlib.Path("/freqtrade/user_data/strategy_state.json"),
-            pathlib.Path("user_data/strategy_state.json"),
-        ]
-        for p in paths_to_check:
-            try:
-                if p.exists():
-                    raw = p.read_text(encoding="utf-8")
-                    data = json.loads(raw)
-                    mode = data.get("active_strategy", "RenderQuantV1")
-                    if mode in ("RenderQuantV1", "RenderQuantV2_Institutional"):
-                        if mode != self._cached_strategy_mode:
-                            logger.info(
-                                "RenderQuant [META-STRATEGY]: Modo ativo comutado em tempo real via Telegram -> %s",
-                                mode,
-                            )
-                        self._cached_strategy_mode = mode
-                        self._last_state_read_ts = now
-                        return mode
-            except Exception as exc:
-                logger.debug("RenderQuant: Leitura concorrente de strategy_state.json contornada: %s", exc)
+        try:
+            from user_data.state_store import load_state
+            data = load_state(
+                "strategy_state",
+                [
+                    pathlib.Path("/freqtrade/user_data/strategy_state.json"),
+                    pathlib.Path("user_data/strategy_state.json"),
+                ],
+                {"active_strategy": "RenderQuantV1"},
+            )
+            mode = data.get("active_strategy", "RenderQuantV1")
+            if mode in ("RenderQuantV1", "RenderQuantV2_Institutional"):
+                if mode != self._cached_strategy_mode:
+                    logger.info(
+                        "RenderQuant [META-STRATEGY]: Modo ativo comutado em tempo real via Telegram -> %s",
+                        mode,
+                    )
+                self._cached_strategy_mode = mode
+                self._last_state_read_ts = now
+                return mode
+        except Exception as exc:
+            logger.debug("RenderQuant: Falha ao ler strategy_state (fallback V1): %s", exc)
 
         self._last_state_read_ts = now
         return self._cached_strategy_mode

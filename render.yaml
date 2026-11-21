@@ -24,3 +24,5 @@ services:
         sync: false
       - key: FREQTRADE__TELEGRAM__CHAT_ID
         sync: false
+      - key: AI_GUARDIAN_API_KEY
+        sync: false

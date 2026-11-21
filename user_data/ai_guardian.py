@@ -11,6 +11,8 @@ import time
 import urllib.request
 import re
 
+from user_data.state_store import load_state, save_state
+
 logger = logging.getLogger("ai_guardian")
 
 # Localização do arquivo de estado em disco (persistência robusta no container e no host)
@@ -21,7 +23,7 @@ STATE_PATHS = [
 
 DEFAULT_STATE = {
     "enabled": True,
-    "api_key": "sk-sNU4kc9k0F5g97VUVnpNLO9K7pL70mJIYHnkMgSbaz4X8TM7",
+    "api_key": os.environ.get("AI_GUARDIAN_API_KEY", "").strip(),
     "endpoint": "https://api.miraiapi.com/v1/chat/completions",
     "model": "claude-fable-5.1",
     "min_conviccao": 0.65,
@@ -48,29 +50,15 @@ def _get_target_path() -> pathlib.Path:
 
 def get_state() -> dict:
     with _STATE_LOCK:
-        p = _get_target_path()
-        if p.exists():
-            try:
-                data = json.loads(p.read_text(encoding="utf-8"))
-                return {**DEFAULT_STATE, **data}
-            except Exception:
-                pass
-        return dict(DEFAULT_STATE)
+        return load_state(STATE_DB_KEY, STATE_PATHS, DEFAULT_STATE)
 
 
 def update_state(**kwargs) -> dict:
     with _STATE_LOCK:
-        p = _get_target_path()
         current = get_state()
         for k, v in kwargs.items():
             current[k] = v
-        try:
-            p.parent.mkdir(parents=True, exist_ok=True)
-            tmp = p.with_suffix(".tmp")
-            tmp.write_text(json.dumps(current, indent=2, ensure_ascii=False), encoding="utf-8")
-            tmp.replace(p)
-        except Exception as exc:
-            logger.warning("[AI GUARDIAN] Falha ao salvar estado: %s", exc)
+        save_state(STATE_DB_KEY, current, STATE_PATHS)
         return current
 
 
