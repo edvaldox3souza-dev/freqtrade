@@ -593,6 +593,33 @@ def ensure_runtime_config(
             try:
                 cfg = json.loads(dst_path.read_text(encoding="utf-8"))
                 changed = False
+                # FIX 1: força sempre a estratégia ativa do strategy_state no boot.
+                # Sem isto, uma runtime config sem "strategy" faz o freqtrade cair
+                # no fallback SimpleStrategy (template 5m) — bug observado em produção.
+                try:
+                    st = get_strategy_state()
+                    active = st.get("active_strategy", "")
+                    if active and cfg.get("strategy") != active:
+                        cfg["strategy"] = active
+                        changed = True
+                        print(f"PT-BR_BOOT_STRATEGY_FORCE: {active}", flush=True)
+                except Exception as exc:
+                    print("PT-BR_BOOT_STRATEGY_WARN:", exc, flush=True)
+                # FIX 2: chaves da corretora via env vars (persistentes na Render,
+                # sobrevivem a sleep/redeploy). Env tem prioridade sobre /tmp.
+                env_key = os.environ.get("EXCHANGE_KEY", "").strip()
+                env_secret = os.environ.get("EXCHANGE_SECRET", "").strip()
+                env_pass = os.environ.get("EXCHANGE_PASSWORD", "").strip()
+                ex_cfg = cfg.setdefault("exchange", {})
+                if env_key and ex_cfg.get("key") != env_key:
+                    ex_cfg["key"] = env_key
+                    changed = True
+                if env_secret and ex_cfg.get("secret") != env_secret:
+                    ex_cfg["secret"] = env_secret
+                    changed = True
+                if env_pass and ex_cfg.get("password") != env_pass:
+                    ex_cfg["password"] = env_pass
+                    changed = True
                 ex = cfg.get("exchange", {})
                 if not bool(cfg.get("dry_run", True)) and (not ex.get("key") or not ex.get("secret")):
                     cfg["dry_run"] = True
