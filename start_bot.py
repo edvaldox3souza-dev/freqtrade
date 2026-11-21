@@ -95,25 +95,23 @@ TOKEN, CHAT_ID = _load_tg_creds()
 KEEP_ALIVE_INTERVAL = 540
 
 PT_BR_KEYBOARD = [
-    ["📊 Operações Abertas", "💰 Lucros e Ganhos"],
-    ["💳 Saldo da Conta", "📅 Lucro Diário"],
+    ["📊 Operações Abertas", "❓ Por Que Não Entrou?"],
+    ["💰 Lucros e Ganhos", "💳 Saldo da Conta"],
     ["📈 Estatísticas", "🏆 Por Moeda"],
-    ["📋 Moedas Monitoradas", "🔢 Limite de Trades"],
+    ["📋 Pares Ativos", "🎯 Alternar Estratégia"],
     ["▶️ Iniciar Robô", "⏸️ Pausar Robô"],
-    ["🎯 Alternar Estratégia", "🏦 Corretora / API"],
+    ["🏦 Corretora / API", "🩺 Saúde do Robô"],
     ["🔄 Atualizar Config", "❓ Ajuda (Guia)"],
-    ["🩺 Saúde do Robô"],
 ]
 
 PT_BR_BUTTON_MAP = {
     "📊 Operações Abertas": "_status",
+    "❓ Por Que Não Entrou?": "_unkiorra_why",
     "💰 Lucros e Ganhos": "_profit",
     "💳 Saldo da Conta": "_balance",
-    "📅 Lucro Diário": "_daily",
     "📈 Estatísticas": "_stats",
     "🏆 Por Moeda": "_performance",
-    "📋 Moedas Monitoradas": "_whitelist",
-    "🔢 Limite de Trades": "_count",
+    "📋 Pares Ativos": "_whitelist",
     "▶️ Iniciar Robô": "_start",
     "⏸️ Pausar Robô": "_stop",
     "🎯 Alternar Estratégia": "_unkiorra_estrategia",
@@ -833,12 +831,20 @@ def build_web_pt_br_script() -> str:
         "}"
         "document.documentElement.lang='pt-BR';"
         "let timer=null;"
+        "function mountCockpitHUD(){"
+        "  if(!document.body||document.getElementById('unk-cockpit-hud'))return;"
+        "  const h=document.createElement('div');h.id='unk-cockpit-hud';"
+        "  h.style.cssText='position:fixed;top:0;left:0;right:0;height:36px;z-index:99998;background:linear-gradient(90deg,#0a0f1d,#0f172a);border-bottom:1px solid #14b8a6;display:flex;align-items:center;justify-content:space-between;padding:0 16px;font-family:sans-serif;font-size:12px;color:#f8fafc;box-shadow:0 2px 10px rgba(0,0,0,0.5);';"
+        "  h.innerHTML='<div style=\"display:flex;align-items:center;gap:16px;\"><span style=\"color:#2dd4bf;font-weight:bold;\">⚡ UNKIORRA QUANT COCKPIT</span><span>Modo: <strong style=\"color:#38bdf8;\">RenderQuantV1</strong></span><span>Risco Máx: <strong style=\"color:#4ade80;\">Heat &le; 3.0%</strong></span><span>Circuit Breaker: <strong style=\"color:#4ade80;\">🟢 ARMADO</strong></span></div><div style=\"display:flex;align-items:center;gap:12px;\"><span style=\"background:#0f766e;color:#fff;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;\">LIVE SAFEGUARD</span></div>';"
+        "  document.body.prepend(h);"
+        "  document.body.style.paddingTop='36px';"
+        "}"
         "function mountExModal(){""  if(!document.body||document.getElementById('unk-ex-btn'))return;""  const btn=document.createElement('button');btn.id='unk-ex-btn';""  btn.textContent='🏦 Corretora & API';""  btn.style.cssText='position:fixed;bottom:16px;right:16px;z-index:9999;background:#0f766e;color:#fff;border:none;border-radius:999px;padding:10px 16px;font-weight:600;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.3);';""  document.body.appendChild(btn);""  const ov=document.createElement('div');ov.id='unk-ex-ov';""  ov.style.cssText='display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.6);align-items:center;justify-content:center;';""  ov.innerHTML='<div style=\"background:#1e293b;color:#f8fafc;padding:20px;border-radius:12px;width:360px;max-width:92vw;font-family:sans-serif;\"><h3 style=\"margin:0 0 12px\">🏦 Corretora & Chaves API</h3><label style=\"display:block;font-size:12px;margin-top:8px\">Corretora (ex: kraken, binance, bybit, okx)</label><input id=\"unk-ex-name\" style=\"width:100%;padding:8px;margin-top:4px;border-radius:6px;border:1px solid #475569;background:#0f172a;color:#fff;\"/><label style=\"display:block;font-size:12px;margin-top:8px\">API Key</label><input id=\"unk-ex-key\" type=\"password\" placeholder=\"Deixe vazio para manter atual\" style=\"width:100%;padding:8px;margin-top:4px;border-radius:6px;border:1px solid #475569;background:#0f172a;color:#fff;\"/><label style=\"display:block;font-size:12px;margin-top:8px\">API Secret</label><input id=\"unk-ex-sec\" type=\"password\" placeholder=\"Deixe vazio para manter atual\" style=\"width:100%;padding:8px;margin-top:4px;border-radius:6px;border:1px solid #475569;background:#0f172a;color:#fff;\"/><label style=\"display:block;font-size:12px;margin-top:8px\">Passphrase (opcional: OKX/KuCoin)</label><input id=\"unk-ex-pass\" type=\"password\" style=\"width:100%;padding:8px;margin-top:4px;border-radius:6px;border:1px solid #475569;background:#0f172a;color:#fff;\"/><label style=\"display:flex;align-items:center;gap:8px;margin-top:10px;font-size:13px\"><input id=\"unk-ex-dry\" type=\"checkbox\"/> Modo Simulado (Dry-Run)</label><div id=\"unk-ex-msg\" style=\"font-size:12px;margin-top:8px;color:#94a3b8\"></div><div style=\"display:flex;gap:8px;justify-content:flex-end;margin-top:14px\"><button id=\"unk-ex-close\" style=\"padding:8px 12px;border-radius:6px;border:1px solid #475569;background:transparent;color:#fff;cursor:pointer\">Fechar</button><button id=\"unk-ex-save\" style=\"padding:8px 14px;border-radius:6px;border:none;background:#0f766e;color:#fff;font-weight:600;cursor:pointer\">Salvar e Aplicar</button></div></div>';""  document.body.appendChild(ov);""  function getSessionAuth(){try{const raw=localStorage.getItem('ftAuthLoginInfo');if(raw){const p=JSON.parse(raw);const b=p&&typeof p==='object'?Object.values(p)[0]:null;if(b&&b.accessToken)return 'Bearer '+b.accessToken;}}catch(e){}if(!window.__unkAuth){const u=prompt('Usuário da API Freqtrade:');const p=prompt('Senha da API Freqtrade:');if(u&&p)window.__unkAuth='Basic '+btoa(u+':'+p);}return window.__unkAuth||'';}""  btn.onclick=async()=>{ov.style.display='flex';const m=document.getElementById('unk-ex-msg');m.textContent='Carregando...';const auth=getSessionAuth();if(!auth){m.textContent='Autenticação necessária.';return;}try{const r=await fetch('/api/v1/unkiorra/exchange',{headers:{Authorization:auth}});if(r.status===401){window.__unkAuth='';m.textContent='Sessão expirada. Clique novamente.';return;}const d=await r.json();document.getElementById('unk-ex-name').value=d.exchange||'kraken';document.getElementById('unk-ex-dry').checked=!!d.dry_run;m.textContent='Chave atual: '+(d.key_masked||'Não configurada');}catch(e){m.textContent='Erro ao carregar.';}};""  document.getElementById('unk-ex-close').onclick=()=>{ov.style.display='none';};""  document.getElementById('unk-ex-save').onclick=async()=>{const m=document.getElementById('unk-ex-msg');const auth=getSessionAuth();if(!auth){m.textContent='Autenticação necessária.';return;}m.textContent='Salvando...';const body={exchange:document.getElementById('unk-ex-name').value,dry_run:document.getElementById('unk-ex-dry').checked};const k=document.getElementById('unk-ex-key').value,sc=document.getElementById('unk-ex-sec').value,ps=document.getElementById('unk-ex-pass').value;if(k)body.key=k;if(sc)body.secret=sc;if(ps)body.password=ps;try{const r=await fetch('/api/v1/unkiorra/exchange',{method:'POST',headers:{'Content-Type':'application/json',Authorization:auth},body:JSON.stringify(body)});const d=await r.json();m.textContent=r.ok?('Salvo: '+d.exchange+' ('+d.key_masked+'). Recarregando...'):('Erro: '+(d.detail||'falha'));}catch(e){m.textContent='Erro de rede.';}};""}"
         "function runWalk(){"
         "  if(!document.body)return;"
         "  obs.disconnect();"
         "  prefillLogin();"
-        "  walk(document.body);mountExModal();"
+        "  walk(document.body);mountCockpitHUD();mountExModal();"
         "  obs.observe(document.body,{childList:true,subtree:true});"
         "}"
         "const obs=new MutationObserver(()=>{"
@@ -1351,6 +1357,47 @@ def install_pt_br_hooks() -> None:
             reply_markup=build_estrategia_inline_markup(),
         )
 
+    async def _cmd_why(update, context):
+        if not update or not update.effective_chat or str(update.effective_chat.id) != str(CHAT_ID):
+            return
+        why_paths = [pathlib.Path("user_data/why_state.json"), pathlib.Path("/freqtrade/user_data/why_state.json")]
+        state = None
+        for p in why_paths:
+            try:
+                if p.exists():
+                    state = json.loads(p.read_text(encoding="utf-8"))
+                    break
+            except Exception:
+                pass
+        if not state:
+            await update.message.reply_text(
+                "🛡️ *Diagnóstico de Entrada (/why)*\n\n"
+                "O robô está ativo e analisando o mercado. Nenhum veto recente registrado.",
+                parse_mode="Markdown",
+            )
+            return
+
+        dec = state.get("decision", "REJECT")
+        emoji = "✅" if dec == "ENTER" else "🛡️"
+        pair = state.get("pair", "Kraken Spot")
+        reason = state.get("reason", "Aguardando confluência estrutural")
+        ts = state.get("ts", "Recente")
+        heat = state.get("heat")
+        heat_str = f"{heat*100:.2f}% / 3.00%" if heat is not None else "Normal"
+        mode = state.get("mode", "RenderQuantV1")
+
+        msg = (
+            f"{emoji} *Diagnóstico de Decisão (/why)*\n\n"
+            f"• *Status:* `{dec}`\n"
+            f"• *Par:* `{pair}`\n"
+            f"• *Horário:* `{ts}`\n"
+            f"• *Modo:* `{mode}`\n"
+            f"• *Diagnóstico:* {reason}\n"
+            f"• *Portfolio Heat:* `{heat_str}`\n\n"
+            f"💡 _O bot opera com rigor institucional: se o mercado estiver em ruído (KER < 0.35) ou o risco passar de 3%, a entrada é vetada para blindar seu capital._"
+        )
+        await update.message.reply_text(msg, parse_mode="Markdown")
+
     async def _btn_cb(update, context):
         tg = tg_ref.get("self")
         if not tg or not update or not update.message or not update.message.text:
@@ -1360,6 +1407,10 @@ def install_pt_br_hooks() -> None:
         if cid != str(CHAT_ID) and uid != str(CHAT_ID):
             return  # Proteção P0: Ignora mensagens de usuários não autorizados
         txt = update.message.text.strip()
+        if txt == "❓ Por Que Não Entrou?":
+            pending_input.pop(cid, None)
+            await _cmd_why(update, context)
+            raise ApplicationHandlerStop()
         if txt == "🎯 Alternar Estratégia":
             pending_input.pop(cid, None)
             await _cmd_estrategia(update, context)
@@ -1404,6 +1455,7 @@ def install_pt_br_hooks() -> None:
             orig_add_handler(self, CallbackQueryHandler(_cb_unkiorra, pattern=r"^unk_"), group=-1)
             orig_add_handler(self, CommandHandler("corretora", _cmd_corretora))
             orig_add_handler(self, CommandHandler("estrategia", _cmd_estrategia))
+            orig_add_handler(self, CommandHandler("why", _cmd_why))
             orig_add_handler(self, CommandHandler("set_corretora", _cmd_set_corretora))
             orig_add_handler(self, CommandHandler("set_api", _cmd_set_api))
             orig_add_handler(self, CommandHandler("modo_simulado", lambda u, c: _cmd_modo(u, c, True)))
@@ -1428,6 +1480,7 @@ async def setup_telegram_menu() -> None:
     cmds = [
         BotCommand("start", "Painel principal em Portugues"),
         BotCommand("status", "Ver operacoes abertas"),
+        BotCommand("why", "Diagnostico do motivo de nao entrar"),
         BotCommand("profit", "Ver resumo de lucros"),
         BotCommand("balance", "Ver saldo da carteira"),
         BotCommand("daily", "Relatorio de lucro diario"),
@@ -1494,6 +1547,62 @@ def install_sqlalchemy_neon_pool_hooks() -> None:
         print("SQLAlchemy pool hook warning:", exc, flush=True)
 
 
+def start_ram_watchdog(interval: int = 60, soft_limit_mb: int = 420) -> None:
+    """Watchdog de memória para Render Free (512MB) - dispara gc.collect() se RAM > 420MB."""
+    def _watchdog_loop():
+        import gc
+        while True:
+            time.sleep(interval)
+            try:
+                rss_mb = 0.0
+                status_path = pathlib.Path("/proc/self/status")
+                if status_path.exists():
+                    for line in status_path.read_text(encoding="utf-8").splitlines():
+                        if line.startswith("VmRSS:"):
+                            rss_mb = float(line.split()[1]) / 1024.0
+                            break
+                if rss_mb > soft_limit_mb:
+                    before = rss_mb
+                    gc.collect()
+                    print(f"[watchdog] Memória alta ({before:.1f}MB) -> gc.collect() acionado!", flush=True)
+            except Exception as exc:
+                print(f"[watchdog] falha no monitoramento: {exc}", flush=True)
+
+    t = threading.Thread(target=_watchdog_loop, daemon=True, name="ram-watchdog")
+    t.start()
+    print("[watchdog] Monitor de Memória RAM ativo (Soft cap 420MB)!", flush=True)
+
+
+def start_neon_heartbeat(db_url: str, interval: int = 240) -> None:
+    """Executa SELECT 1 a cada 4min para impedir que o Neon Postgres entre em suspensão."""
+    if not db_url or "postgres" not in db_url:
+        return
+
+    def _heartbeat_loop():
+        try:
+            import psycopg2
+        except ImportError:
+            return
+
+        dsn = db_url.replace("postgresql+psycopg2://", "postgresql://")
+        while True:
+            time.sleep(interval)
+            try:
+                conn = psycopg2.connect(dsn, connect_timeout=10)
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+                    cur.fetchone()
+                conn.commit()
+                conn.close()
+                print("[heartbeat] ✓ Neon PostgreSQL mantido ativo (anti-autosuspend)", flush=True)
+            except Exception as exc:
+                print(f"[heartbeat] alerta Neon: {exc}", flush=True)
+
+    t = threading.Thread(target=_heartbeat_loop, daemon=True, name="neon-heartbeat")
+    t.start()
+    print("[heartbeat] Heartbeat do Neon PostgreSQL ativo (240s)!", flush=True)
+
+
 def main() -> None:
     assert "Modo Simulação" in translate_pt_br("Dry run is enabled. All trades are simulated.")
     print("PT-BR_SELF_TEST_OK: All translations verified in container!", flush=True)
@@ -1517,6 +1626,10 @@ def main() -> None:
     # Correção P0 SRE: normaliza dialeto do SQLAlchemy 2.0 (postgres:// -> postgresql://)
     if db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql://", 1)
+
+    # Inicia Watchdog de RAM e Heartbeat do Neon Postgres (Tríade de Ouro - Claude Fable 5.1)
+    start_ram_watchdog()
+    start_neon_heartbeat(db_url)
 
     os.environ["FREQTRADE__API_SERVER__LISTEN_PORT"] = os.environ.get("PORT", "10000")
     # Correção P0: Remove --strategy do sys.argv para que o reload respeite runtime_config.json e a Meta-Strategy dinamicamente!

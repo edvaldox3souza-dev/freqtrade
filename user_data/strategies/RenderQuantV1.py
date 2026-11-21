@@ -83,6 +83,35 @@ class RenderQuantV1(IStrategy):
     _last_state_read_ts: float = 0.0
     _cached_strategy_mode: str = "RenderQuantV1"
 
+    WHY_STATE_FILE = pathlib.Path("user_data/why_state.json")
+
+    def _record_decision(
+        self,
+        pair: str,
+        decision: str,
+        reason: str,
+        ker: float | None = None,
+        heat: float | None = None,
+        cluster: str | None = None,
+    ) -> None:
+        """Persiste em disco a última decisão/rejeição para o comando /why do Telegram (Claude Fable 5.1)."""
+        payload = {
+            "ts": datetime.now(UTC).strftime("%H:%M:%S UTC"),
+            "pair": pair,
+            "decision": decision,
+            "reason": reason,
+            "ker": ker,
+            "heat": heat,
+            "cluster": cluster,
+            "mode": self._cached_strategy_mode,
+        }
+        for path_target in [self.WHY_STATE_FILE, pathlib.Path("/freqtrade/user_data/why_state.json")]:
+            try:
+                path_target.parent.mkdir(parents=True, exist_ok=True)
+                path_target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception:
+                pass
+
     def _get_active_strategy_mode(self) -> str:
         """Lê dinamicamente o arquivo de estado gravado pelo Telegram sem reiniciar o processo.
 
@@ -361,6 +390,7 @@ class RenderQuantV1(IStrategy):
                         free_stake,
                         pair,
                     )
+                    self._record_decision(pair, "REJECT", f"Saldo livre insuficiente (Custo ${order_cost:.2f} > Limite ${limit:.2f})")
                     return False
         except Exception as exc:
             logger.debug("RenderQuant: Falha ao verificar saldo livre disponível: %s", exc)
@@ -407,6 +437,7 @@ class RenderQuantV1(IStrategy):
                     self.daily_loss_stop_pct * 100,
                     pair,
                 )
+                self._record_decision(pair, "REJECT", f"Circuit Breaker ativo (Drawdown diário: {daily_dd_pct*100:.2f}%)")
                 return False
         except Exception as exc:
             logger.debug("RenderQuant: Falha não crítica na checagem do Daily Loss: %s", exc)
@@ -426,6 +457,7 @@ class RenderQuantV1(IStrategy):
                             active_in_cluster,
                             pair,
                         )
+                        self._record_decision(pair, "REJECT", f"Cluster {cluster_name} saturado ({active_in_cluster} posições ativas)", cluster=cluster_name)
                         return False
         except Exception as exc:
             logger.debug("RenderQuant: Falha não crítica na validação de clusters: %s", exc)
@@ -459,6 +491,7 @@ class RenderQuantV1(IStrategy):
                     total_balance,
                     pair,
                 )
+                self._record_decision(pair, "REJECT", f"Portfolio Heat excederia teto (Projetado: {portfolio_heat*100:.2f}% > {self.portfolio_heat_limit*100:.2f}%)", heat=portfolio_heat)
                 return False
 
             logger.info(
@@ -468,6 +501,7 @@ class RenderQuantV1(IStrategy):
                 total_balance,
                 pair,
             )
+            self._record_decision(pair, "ENTER", "Filtros de momentum, KER, saldos e risco aprovados", heat=portfolio_heat)
         except Exception as exc:
             logger.debug("RenderQuant: Falha não crítica na avaliação de Portfolio Heat: %s", exc)
 
@@ -560,6 +594,9 @@ class RenderQuantV1(IStrategy):
             return 0.0
         return round(float(cap), 8)
 
+    # Custo Kraken spot round-trip (0.26% * 2 + 0.10% spread = 0.62%)
+    ROUND_TRIP_COST = 0.0062
+
     def custom_stoploss(
         self,
         pair: str,
@@ -570,7 +607,7 @@ class RenderQuantV1(IStrategy):
         after_fill: bool,
         **kwargs: Any,
     ) -> float:
-        """Stoploss Dinâmico baseado em ATR + Ratchet Progressivo (Contrato R1 Fable 5.1)."""
+        """Trailing Stop Escalonado com Breakeven Pós-Taxas (Tríade de Ouro - Claude Fable 5.1)."""
         atr_pct = 0.015
         if self.dp is not None:
             dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
@@ -581,21 +618,19 @@ class RenderQuantV1(IStrategy):
 
         dynamic_stop = -float(np.clip(2.0 * atr_pct, 0.015, 0.040))
 
-        # R1 Fable 5.1: O modo que ABRIU o trade governa o trailing do trade até o fechamento
-        is_v2_trade = bool(trade.enter_tag and "V2:" in trade.enter_tag)
+        # Degrau 1: Lucro atingiu +1.2% -> Breakeven garantido cobrindo taxas (+0.25% líquido)
+        if current_profit >= 0.012 and current_profit < 0.025:
+            return max(dynamic_stop, 0.0025)
 
-        if is_v2_trade:
-            # Trailing Ratchet V2 Institucional: proteção mais rápida de lucros líquidos
-            if current_profit >= 0.030:
-                return max(dynamic_stop, 0.015)   # Garante lucro líquido real de +1.5%
-            if current_profit >= 0.015:
-                return max(dynamic_stop, 0.002)   # Breakeven precoce (+0.2% cobrindo taxas)
-        else:
-            # Trailing Ratchet V1 Equilibrada: padrão
-            if current_profit >= 0.035:
-                return max(dynamic_stop, 0.012)   # Garante lucro líquido real de +1.2%
-            if current_profit >= 0.018:
-                return max(dynamic_stop, 0.001)   # Breakeven líquido garantido (+0.1%)
+        # Degrau 2: Lucro atingiu +2.5% -> Trava lucro líquido de +1.2%
+        if current_profit >= 0.025 and current_profit < 0.040:
+            return max(dynamic_stop, 0.0120)
+
+        # Degrau 3: Lucro atingiu +4.0% -> Ratchet dinâmico com ATR garantindo pelo menos +2.5% líquido
+        if current_profit >= 0.040:
+            trailing_dist = max(atr_pct * 1.5, 0.015)
+            desired_stop = current_profit - trailing_dist
+            return max(dynamic_stop, desired_stop, 0.0250)
 
         return dynamic_stop
 
