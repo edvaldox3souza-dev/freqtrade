@@ -75,6 +75,7 @@ class RenderQuantV1(IStrategy):
         "MAJORS": ["BTC/USD", "ETH/USD", "BTC/USDT", "ETH/USDT"],
         "LAYER1": ["SOL/USD", "ADA/USD", "SOL/USDT", "ADA/USDT"],
         "DEFI_INFRA": ["LINK/USD", "LINK/USDT"],
+        "PAYMENTS": ["XRP/USD", "XRP/USDT"],
     }
     MAX_TRADES_PER_CLUSTER = 1
 
@@ -503,7 +504,13 @@ class RenderQuantV1(IStrategy):
             )
             self._record_decision(pair, "ENTER", "Filtros de momentum, KER, saldos e risco aprovados", heat=portfolio_heat)
         except Exception as exc:
-            logger.debug("RenderQuant: Falha não crítica na avaliação de Portfolio Heat: %s", exc)
+            logger.error(
+                "RenderQuant [FAIL-CLOSED RISK]: Erro na avaliação de Portfolio Heat: %s. Entrada em %s vetada por segurança.",
+                exc,
+                pair,
+            )
+            self._record_decision(pair, "REJECT", f"Falha na avaliação de risco/heat: {exc}")
+            return False
 
         return True
 
