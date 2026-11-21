@@ -38,10 +38,22 @@ class RenderQuantV1(IStrategy):
         "180": 0.020,
     }
 
-    # Stoploss gerenciado internamente pelo bot (Kraken spot não suporta stop nativo em livro via CCXT)
+    # Stop-Loss Nativo no Livro da Corretora (Ação 2 - Claude Fable 5.1)
     stoploss: float = -0.04
-    stoploss_on_exchange: bool = False
+    stoploss_on_exchange: bool = True
     use_custom_stoploss: bool = True
+
+    order_types = {
+        "entry": "limit",
+        "exit": "limit",
+        "emergency_exit": "market",
+        "force_entry": "market",
+        "force_exit": "market",
+        "stoploss": "market",
+        "stoploss_on_exchange": True,
+        "stoploss_on_exchange_interval": 60,
+        "stoploss_on_exchange_limit_ratio": 0.99,
+    }
 
     use_exit_signal: bool = True
     exit_profit_only: bool = False

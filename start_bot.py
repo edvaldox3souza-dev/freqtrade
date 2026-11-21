@@ -596,6 +596,19 @@ def ensure_runtime_config(
                     tg_cfg["token"] = TOKEN
                     tg_cfg["chat_id"] = str(CHAT_ID)
                     changed = True
+                if "order_types" not in cfg or not cfg["order_types"].get("stoploss_on_exchange"):
+                    cfg.setdefault("order_types", {}).update({
+                        "entry": "limit",
+                        "exit": "limit",
+                        "emergency_exit": "market",
+                        "force_entry": "market",
+                        "force_exit": "market",
+                        "stoploss": "market",
+                        "stoploss_on_exchange": True,
+                        "stoploss_on_exchange_interval": 60,
+                        "stoploss_on_exchange_limit_ratio": 0.99,
+                    })
+                    changed = True
                 if changed:
                     _atomic_write_text(dst_path, json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
             except Exception as exc:
@@ -611,17 +624,24 @@ def _mask_secret(val: str) -> str:
     return "****" + val[-4:]
 
 
+EXCHANGES_WITH_ON_EXCHANGE_STOP = {"binance", "kucoin", "kraken", "gateio", "huobi"}
+
+
 def get_exchange_status(dst_path: pathlib.Path = RUNTIME_CONFIG_PATH) -> dict:
     with _RUNTIME_CFG_LOCK:
         path = dst_path if dst_path.exists() else SECRET_CONFIG_PATH
         cfg = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
     ex = cfg.get("exchange", {})
+    ex_name = ex.get("name", "kraken").lower()
+    ot = cfg.get("order_types", {})
+    on_exchange = ot.get("stoploss_on_exchange", True) and (ex_name in EXCHANGES_WITH_ON_EXCHANGE_STOP)
     return {
-        "exchange": ex.get("name", "kraken"),
+        "exchange": ex_name,
         "key_masked": _mask_secret(ex.get("key", "")),
         "secret_masked": _mask_secret(ex.get("secret", "")),
         "has_passphrase": bool(ex.get("password")),
         "dry_run": bool(cfg.get("dry_run", True)),
+        "stoploss_on_exchange": on_exchange,
         "pair_whitelist": ex.get("pair_whitelist", ["BTC/USDT", "ETH/USDT"]),
     }
 
@@ -649,6 +669,18 @@ def update_exchange_config(
             ex["pair_whitelist"] = [
                 re.sub(r"/(USD|USDT)$", f"/{target_stake}", p) for p in old_pairs
             ]
+            ot = cfg.setdefault("order_types", {})
+            ot.update({
+                "entry": "limit",
+                "exit": "limit",
+                "emergency_exit": "market",
+                "force_entry": "market",
+                "force_exit": "market",
+                "stoploss": "market",
+                "stoploss_on_exchange": cleaned in EXCHANGES_WITH_ON_EXCHANGE_STOP,
+                "stoploss_on_exchange_interval": 60,
+                "stoploss_on_exchange_limit_ratio": 0.99,
+            })
         if api_key is not None:
             ex["key"] = api_key.strip()
         if api_secret is not None:
@@ -689,13 +721,15 @@ def format_corretora_text() -> str:
     st = get_exchange_status()
     modo = "Simulação (Dry-Run)" if st["dry_run"] else "Conta Real"
     ts = time.strftime("%H:%M:%S")
+    stop_nativo = "🟢 ATIVO no Livro (60s)" if st.get("stoploss_on_exchange") else "🟡 Stop Local (Monitorado pelo Bot)"
     return (
         f"🏦 *Configuração da Corretora & API*\n\n"
-        f"• *Corretora atual:* `{st['exchange']}`\n"
+        f"• *Corretora atual:* `{st['exchange'].upper()}`\n"
         f"• *Modo:* {modo}\n"
+        f"• *Stop-Loss Nativo:* {stop_nativo}\n"
         f"• *API Key:* `{st['key_masked']}`\n"
         f"• *API Secret:* `{st['secret_masked']}`\n"
-        f"• *Passphrase:* `{'Configurada' if st['has_passphrase'] else 'Não'}`\n"
+        f"• *Passphrase:* `{'Configurada' if st['has_passphrase'] else 'Não necessária'}`\n"
         f"• *Atualizado:* `{ts}`\n\n"
         f"👇 *Toque nos botões abaixo para configurar sem comandos:*"
     )
@@ -1380,6 +1414,7 @@ def install_pt_br_hooks() -> None:
         st = get_exchange_status()
         mode_str = "Simulado (Dry-Run)" if st.get("dry_run", True) else "CONTA REAL"
         tok_masked = f"...{TOKEN[-5:]}" if len(TOKEN) > 5 else "NÃO CONFIGURADO"
+        stop_nativo_diag = "🟢 ATIVO no Livro da Corretora (intervalo 60s)" if st.get("stoploss_on_exchange") else "🟡 Stop Local (Monitorado pelo Bot)"
         diag_msg = (
             "🩺 *Diagnóstico Forense do Sistema (Freqtrade + Render)*\n\n"
             f"• *Telegram RPC:* {'✅ Ativo e Operacional' if TOKEN else '❌ Desativado (Sem Token)'}\n"
@@ -1387,6 +1422,7 @@ def install_pt_br_hooks() -> None:
             f"• *Chat ID Pareado:* `{CHAT_ID}`\n"
             f"• *Modo de Operação:* `{mode_str}`\n"
             f"• *Corretora:* `{st.get('exchange', 'kraken').upper()}`\n"
+            f"• *Stop-Loss na Corretora:* `{stop_nativo_diag}`\n"
             f"• *Estratégia:* `RenderQuantV1` (Alpha Triad)\n"
             f"• *Watchdogs:* RAM (420MB) + Neon Anti-Sleep Ativos\n\n"
             "💡 _Seu bot está respondendo normalmente aos comandos._"
