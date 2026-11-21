@@ -118,8 +118,9 @@ PT_BR_KEYBOARD = [
     ["💳 Saldo da Conta", "📈 Desempenho"],
     ["📋 Pares Ativos", "🏆 Por Moeda"],
     ["▶️ Iniciar Robô", "⏸️ Pausar Robô"],
-    ["🏦 Corretora", "🩺 Diagnóstico"],
-    ["⚙️ Configurações", "❓ Ajuda (Guia)"],
+    ["🏦 Corretora", "🧠 Guardião IA"],
+    ["🩺 Diagnóstico", "⚙️ Configurações"],
+    ["❓ Ajuda (Guia)"],
 ]
 
 PT_BR_BUTTON_MAP = {
@@ -143,6 +144,9 @@ PT_BR_BUTTON_MAP = {
     "❓ Ajuda (Guia)": "_help",
     "🏦 Corretora": "_unkiorra_corretora",
     "🏦 Corretora / API": "_unkiorra_corretora",
+    "🧠 Guardião IA": "_cmd_ai_guardian",
+    "🧠 Guardião IA (Fable)": "_cmd_ai_guardian",
+    "🧠 IA Guardian": "_cmd_ai_guardian",
     "🩺 Diagnóstico": "_cmd_diag",
     "🩺 Saúde do Robô": "_cmd_diag",
 }
@@ -808,6 +812,23 @@ def format_estrategia_text() -> str:
     )
 
 
+def format_ai_guardian_text() -> str:
+    try:
+        from user_data.ai_guardian import format_ai_guardian_text as _fmt
+        return _fmt()
+    except Exception as exc:
+        return f"🧠 *Guardião IA*\n\n⚠️ Erro ao carregar status: `{exc}`"
+
+
+def build_ai_guardian_inline_markup():
+    try:
+        from user_data.ai_guardian import build_ai_guardian_inline_markup as _bld
+        return _bld()
+    except Exception:
+        from telegram import InlineKeyboardMarkup
+        return InlineKeyboardMarkup([])
+
+
 
 def build_web_pt_br_script() -> str:
     return (
@@ -1268,6 +1289,15 @@ def install_pt_br_hooks() -> None:
             reply_markup=build_corretora_inline_markup(),
         )
 
+    async def _cmd_ai_guardian(update, context):
+        if not is_authorized_chat(update):
+            return
+        await update.message.reply_text(
+            format_ai_guardian_text(),
+            parse_mode="Markdown",
+            reply_markup=build_ai_guardian_inline_markup(),
+        )
+
     pending_input = {}
 
 
@@ -1329,6 +1359,61 @@ def install_pt_br_hooks() -> None:
                     format_estrategia_text(),
                     parse_mode="Markdown",
                     reply_markup=build_estrategia_inline_markup(),
+                )
+            except Exception:
+                pass
+            return
+        elif data.startswith("unk_ai:"):
+            from user_data.ai_guardian import (
+                get_state as _ai_get_state,
+                update_state as _ai_update_state,
+                test_ai_connection as _ai_test,
+            )
+            sub = data.split(":", 1)[1]
+            if sub == "toggle":
+                cur = _ai_get_state()
+                _ai_update_state(enabled=not cur.get("enabled", False))
+            elif sub.startswith("conv:"):
+                try:
+                    c_val = float(sub.split(":", 1)[1])
+                    _ai_update_state(min_conviccao=c_val)
+                except Exception:
+                    pass
+            elif sub == "key":
+                pending_input[cid] = ("ai_api_key", time.monotonic())
+                from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+                cancel_kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancelar", callback_data="unk_input:cancel")]])
+                await q.message.reply_text(
+                    "Envie agora apenas a sua *Chave de API do Claude Fable (Mirai)*.\nSua mensagem será apagada do chat imediatamente após o salvamento.",
+                    parse_mode="Markdown",
+                    reply_markup=cancel_kb,
+                )
+                return
+            elif sub == "test":
+                await q.answer("🧪 Testando conexão com Claude Fable 5.1...", show_alert=False)
+                ok, t_msg = _ai_test()
+                await q.message.reply_text(t_msg, parse_mode="Markdown")
+                return
+            elif sub == "verdict":
+                st_ai = _ai_get_state()
+                last_v = st_ai.get("last_verdict")
+                if last_v and isinstance(last_v, dict):
+                    v_res = "✅ APROVADO" if last_v.get("aprovado") else "⛔ VETADO"
+                    v_text = (
+                        f"Parecer {last_v.get('pair', 'N/A')} ({last_v.get('ts')}):\n"
+                        f"Status: {v_res}\n"
+                        f"Convicção: {int(last_v.get('conviccao', 0)*100)}%\n"
+                        f"Motivo: {last_v.get('motivo')}"
+                    )
+                else:
+                    v_text = "Nenhum parecer emitido ainda. A IA avaliará a próxima oportunidade de trade."
+                await q.answer(text=v_text[:200], show_alert=True)
+                return
+            try:
+                await q.edit_message_text(
+                    format_ai_guardian_text(),
+                    parse_mode="Markdown",
+                    reply_markup=build_ai_guardian_inline_markup(),
                 )
             except Exception:
                 pass
@@ -1509,6 +1594,15 @@ def install_pt_br_hooks() -> None:
             "/diag", "diag", "/diagnostico", "diagnostico", "/saude", "saude",
             "🩺saúdedorobô", "🩺saudedorobo", "🩺diagnóstico", "🩺diagnostico"
         }
+        _ALIASES_AI = {
+            "/ia", "ia", "/ai", "ai", "/guardian", "guardian",
+            "🧠guardiãoia", "🧠guardiaoia", "🧠iaguardian", "guardiaoia"
+        }
+
+        if norm in _ALIASES_AI or txt in ("🧠 Guardião IA", "🧠 IA Guardian", "🧠 Guardião IA (Fable)"):
+            pending_input.pop(cid, None)
+            await _cmd_ai_guardian(update, context)
+            raise ApplicationHandlerStop()
 
         if norm in _ALIASES_DIAG or txt in ("🩺 Diagnóstico", "🩺 Saúde do Robô"):
             pending_input.pop(cid, None)
@@ -1537,12 +1631,21 @@ def install_pt_br_hooks() -> None:
         if cid == str(CHAT_ID) and cid in pending_input:
             field, ts = pending_input.pop(cid)
             if time.monotonic() - ts > PENDING_INPUT_TTL_SEC:
-                await update.message.reply_text("⏳ Tempo esgotado para digitar a chave. Toque novamente em 🏦 Corretora / API.")
+                await update.message.reply_text("⏳ Tempo esgotado para digitar o valor. Tente novamente no menu.")
                 raise ApplicationHandlerStop()
             try:
                 await update.message.delete()
             except Exception:
                 pass
+            if field == "ai_api_key":
+                from user_data.ai_guardian import update_state as _ai_update_state
+                _ai_update_state(api_key=txt.strip())
+                await update.effective_chat.send_message(
+                    "✅ *Chave do Claude Fable (Mirai API) salva com sucesso!*\n\n" + format_ai_guardian_text(),
+                    parse_mode="Markdown",
+                    reply_markup=build_ai_guardian_inline_markup(),
+                )
+                raise ApplicationHandlerStop()
             kwargs = {field: txt}
             st = update_exchange_config(**kwargs)
             if hasattr(tg, "_reload_config"):
@@ -1564,6 +1667,9 @@ def install_pt_br_hooks() -> None:
             registered_apps.add(app_id)
             orig_add_handler(self, CallbackQueryHandler(_cb_unkiorra, pattern=r"^unk_"), group=-1)
             orig_add_handler(self, CommandHandler("corretora", _cmd_corretora), group=-1)
+            orig_add_handler(self, CommandHandler("ia", _cmd_ai_guardian), group=-1)
+            orig_add_handler(self, CommandHandler("ai", _cmd_ai_guardian), group=-1)
+            orig_add_handler(self, CommandHandler("guardian", _cmd_ai_guardian), group=-1)
             orig_add_handler(self, CommandHandler("estrategia", _cmd_estrategia), group=-1)
             orig_add_handler(self, CommandHandler("strategy", _cmd_estrategia), group=-1)
             orig_add_handler(self, CommandHandler("why", _cmd_why), group=-1)

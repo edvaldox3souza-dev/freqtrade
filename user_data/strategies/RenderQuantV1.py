@@ -534,6 +534,50 @@ class RenderQuantV1(IStrategy):
             self._record_decision(pair, "REJECT", f"Falha na avaliação de risco/heat: {exc}")
             return False
 
+        # 4. Gatekeeper Cognitivo AI Guardian (Mirai API / Claude Fable 5.1 - Claude Fable 5.1)
+        try:
+            from user_data.ai_guardian import consult_ai_guardian, get_state
+            ai_state = get_state()
+            if ai_state.get("enabled", False):
+                ker_val = 0.40
+                atr_val = 0.018
+                vol_z_val = 1.0
+                regime_bull_val = True
+                if self.dp is not None:
+                    dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+                    if dataframe is not None and not dataframe.empty:
+                        last_row = dataframe.iloc[-1]
+                        ker_val = float(last_row.get("ker", 0.40))
+                        atr_val = float(last_row.get("atr_pct", 0.018))
+                        vol_z_val = float(last_row.get("vol_modified_z", 1.0))
+                        regime_bull_val = bool(last_row.get("market_regime_bull", True))
+
+                verdict = consult_ai_guardian(
+                    pair=pair,
+                    rate=rate,
+                    ker=ker_val,
+                    atr_pct=atr_val,
+                    vol_z=vol_z_val,
+                    regime_bull=regime_bull_val,
+                    daily_drawdown_pct=daily_dd_pct if 'daily_dd_pct' in locals() else 0.0,
+                    mode=self._cached_strategy_mode,
+                )
+
+                if not verdict.get("aprovado", True):
+                    motivo_ia = verdict.get("motivo", "Veto emitido pela IA")
+                    logger.info("RenderQuant [AI GUARDIAN VETO]: Entrada em %s vetada pela IA: %s", pair, motivo_ia)
+                    self._record_decision(pair, "REJECT", f"IA Guardian: {motivo_ia}")
+                    return False
+
+                logger.info(
+                    "RenderQuant [AI GUARDIAN PASS]: Entrada em %s aprovada pela IA (Convicção: %.0f%% | %s)",
+                    pair,
+                    verdict.get("conviccao", 0.70) * 100,
+                    verdict.get("motivo"),
+                )
+        except Exception as exc:
+            logger.debug("RenderQuant: Falha não crítica na consulta ao AI Guardian: %s", exc)
+
         return True
 
     def custom_stake_amount(
