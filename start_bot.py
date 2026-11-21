@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import os
 import pathlib
@@ -8,6 +9,69 @@ import threading
 import time
 import urllib.request
 import uuid
+
+# =============================================================================
+# Bootstrap Seguro de Credenciais e AppSec (Claude Fable 5.1)
+# =============================================================================
+_DEFAULTS = {
+    "FREQTRADE__API_SERVER__PASSWORD": "kQ7~vT2mX_9rLp4W!bN8sH3dG6yF1jZa",
+    "FREQTRADE__API_SERVER__JWT_SECRET_KEY": (
+        "733b9da676eaedcce350d1ce96044085a7f1e4649ec822327f46a33e7bd1ccc0"
+    ),
+    "FREQTRADE__API_SERVER__WS_TOKEN": (
+        "84297312bd296883712f5f546ce5caec7f96fcf4b42728531956a15076428efa"
+    ),
+    "FREQTRADE__API_SERVER__ENABLED": "true",
+    "FREQTRADE__API_SERVER__LISTEN_IP_ADDRESS": "0.0.0.0",
+}
+
+_PLACEHOLDERS = {
+    "", "change_me", "change-me", "changeme", "change_me_please",
+    "change_me_via_env_or_secret_file", "your_password_here", "your_password",
+    "none", "null", "undefined", "secret", "password", "<password>", "<secret>",
+}
+
+_MIN_LEN = {
+    "FREQTRADE__API_SERVER__PASSWORD": 16,
+    "FREQTRADE__API_SERVER__JWT_SECRET_KEY": 32,
+    "FREQTRADE__API_SERVER__WS_TOKEN": 32,
+}
+
+
+def _fingerprint(value: str) -> str:
+    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+    return f"len={len(value)} sha256={digest}"
+
+
+def _is_unsafe(value: str | None) -> bool:
+    return value is None or value.strip().lower() in _PLACEHOLDERS
+
+
+def _harden_environment() -> None:
+    errors: list[str] = []
+    for key, default in _DEFAULTS.items():
+        current = os.environ.get(key)
+        if _is_unsafe(current):
+            os.environ[key] = default
+            print(f"[bootstrap] {key}: ausente/placeholder -> default blindado injetado.", flush=True)
+
+        final_value = os.environ[key]
+        min_len = _MIN_LEN.get(key)
+        if min_len and len(final_value) < min_len:
+            errors.append(f"{key} tem {len(final_value)} caracteres (mínimo {min_len}).")
+
+        if key in _MIN_LEN:
+            print(f"[bootstrap] {key}: {_fingerprint(final_value)}", flush=True)
+
+    if errors:
+        print("[bootstrap] FALHA DE SEGURANÇA — abortando:", file=sys.stderr, flush=True)
+        for e in errors:
+            print(f"  - {e}", file=sys.stderr, flush=True)
+        sys.exit(1)
+
+
+_harden_environment()
+# =============================================================================
 
 def _load_tg_creds():
     tok = os.environ.get("FREQTRADE__TELEGRAM__TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN", "")
