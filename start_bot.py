@@ -35,8 +35,9 @@ PT_BR_KEYBOARD = [
     ["📈 Estatísticas", "🏆 Por Moeda"],
     ["📋 Moedas Monitoradas", "🔢 Limite de Trades"],
     ["▶️ Iniciar Robô", "⏸️ Pausar Robô"],
+    ["🎯 Alternar Estratégia", "🏦 Corretora / API"],
     ["🔄 Atualizar Config", "❓ Ajuda (Guia)"],
-    ["🏦 Corretora / API", "🩺 Saúde do Robô"],
+    ["🩺 Saúde do Robô"],
 ]
 
 PT_BR_BUTTON_MAP = {
@@ -50,6 +51,7 @@ PT_BR_BUTTON_MAP = {
     "🔢 Limite de Trades": "_count",
     "▶️ Iniciar Robô": "_start",
     "⏸️ Pausar Robô": "_stop",
+    "🎯 Alternar Estratégia": "_unkiorra_estrategia",
     "🔄 Atualizar Config": "_reload_config",
     "❓ Ajuda (Guia)": "_help",
     "🏦 Corretora / API": "_unkiorra_corretora",
@@ -605,6 +607,74 @@ def format_corretora_text() -> str:
     )
 
 
+STRATEGY_STATE_PATH = pathlib.Path("/freqtrade/user_data/strategy_state.json")
+AVAILABLE_STRATEGIES = [
+    ("RenderQuantV1", "🛡️ RenderQuant V1 (Equilibrada)"),
+    ("RenderQuantV2_Institutional", "🏛️ RenderQuant V2 (Institucional)"),
+]
+
+
+def get_strategy_state() -> dict:
+    if STRATEGY_STATE_PATH.exists():
+        try:
+            return json.loads(STRATEGY_STATE_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    active_env = os.environ.get("FREQTRADE_STRATEGY", "RenderQuantV1")
+    return {
+        "active_strategy": active_env,
+        "updated_at": time.strftime("%H:%M:%S UTC"),
+    }
+
+
+def update_strategy_state(strat_name: str) -> dict:
+    state = get_strategy_state()
+    state["active_strategy"] = strat_name
+    state["updated_at"] = time.strftime("%H:%M:%S UTC")
+    try:
+        STRATEGY_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_write_text(STRATEGY_STATE_PATH, json.dumps(state, indent=2, ensure_ascii=False) + "\n")
+    except Exception as exc:
+        print("PT-BR_STRATEGY_STATE_WARN:", exc, flush=True)
+
+    with _RUNTIME_CFG_LOCK:
+        if RUNTIME_CONFIG_PATH.exists():
+            try:
+                cfg = json.loads(RUNTIME_CONFIG_PATH.read_text(encoding="utf-8"))
+                cfg["strategy"] = strat_name
+                _atomic_write_text(RUNTIME_CONFIG_PATH, json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
+            except Exception as exc:
+                print("PT-BR_RUNTIME_STRATEGY_WARN:", exc, flush=True)
+    return state
+
+
+def build_estrategia_inline_markup():
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+    st = get_strategy_state()
+    active = st.get("active_strategy", "RenderQuantV1")
+    rows = []
+    for s_name, label in AVAILABLE_STRATEGIES:
+        mark = "✅" if s_name == active else "⬜"
+        rows.append([InlineKeyboardButton(text=f"{mark} {label}", callback_data=f"unk_strat:{s_name}")])
+    rows.append([InlineKeyboardButton(text="🔄 Atualizar Lista", callback_data="unk_strat:refresh")])
+    return InlineKeyboardMarkup(rows)
+
+
+def format_estrategia_text() -> str:
+    st = get_strategy_state()
+    active = st.get("active_strategy", "RenderQuantV1")
+    ts = st.get("updated_at", time.strftime("%H:%M:%S"))
+    return (
+        f"🎯 *Seleção de Estratégia de Operação*\n\n"
+        f"• *Estratégia ativa no momento:* `{active}`\n"
+        f"• *Última alteração:* `{ts}`\n\n"
+        f"👇 *Toque em uma das opções abaixo para alternar:* \n"
+        f"_(A nova estratégia assumirá as próximas entradas sem interromper posições abertas)_"
+    )
+
+
+
 def build_web_pt_br_script() -> str:
     return (
         "<scr" + "ipt>" + WEB_PT_BR_MARKER + "(function(){"
@@ -1103,6 +1173,24 @@ def install_pt_br_hooks() -> None:
                     await tg._reload_config(update, context)
                 except Exception:
                     pass
+        elif data.startswith("unk_strat:"):
+            if data != "unk_strat:refresh":
+                strat_name = data.split(":", 1)[1]
+                st = update_strategy_state(strat_name)
+                if tg and hasattr(tg, "_reload_config"):
+                    try:
+                        await tg._reload_config(update, context)
+                    except Exception:
+                        pass
+            try:
+                await q.edit_message_text(
+                    format_estrategia_text(),
+                    parse_mode="Markdown",
+                    reply_markup=build_estrategia_inline_markup(),
+                )
+            except Exception:
+                pass
+            return
         elif data.startswith("unk_mode:"):
             dry = data.endswith(":dry")
             try:
@@ -1177,12 +1265,25 @@ def install_pt_br_hooks() -> None:
         label = "Simulação (Dry-Run)" if st["dry_run"] else "Conta Real"
         await update.message.reply_text(f"✅ Modo alterado para *{label}*.", parse_mode="Markdown")
 
+    async def _cmd_estrategia(update, context):
+        if not update or not update.effective_chat or str(update.effective_chat.id) != str(CHAT_ID):
+            return
+        await update.message.reply_text(
+            format_estrategia_text(),
+            parse_mode="Markdown",
+            reply_markup=build_estrategia_inline_markup(),
+        )
+
     async def _btn_cb(update, context):
         tg = tg_ref.get("self")
         if not tg or not update or not update.message or not update.message.text:
             return
         txt = update.message.text.strip()
         cid = str(update.effective_chat.id) if update.effective_chat else ""
+        if txt == "🎯 Alternar Estratégia":
+            pending_input.pop(cid, None)
+            await _cmd_estrategia(update, context)
+            raise ApplicationHandlerStop()
         if txt == "🏦 Corretora / API":
             pending_input.pop(cid, None)
             await _cmd_corretora(update, context)
@@ -1222,6 +1323,7 @@ def install_pt_br_hooks() -> None:
             registered_apps.add(app_id)
             orig_add_handler(self, CallbackQueryHandler(_cb_unkiorra, pattern=r"^unk_"), group=-1)
             orig_add_handler(self, CommandHandler("corretora", _cmd_corretora))
+            orig_add_handler(self, CommandHandler("estrategia", _cmd_estrategia))
             orig_add_handler(self, CommandHandler("set_corretora", _cmd_set_corretora))
             orig_add_handler(self, CommandHandler("set_api", _cmd_set_api))
             orig_add_handler(self, CommandHandler("modo_simulado", lambda u, c: _cmd_modo(u, c, True)))
@@ -1321,7 +1423,7 @@ def main() -> None:
         "--userdir",
         "/freqtrade/user_data",
         "--strategy",
-        os.environ.get("FREQTRADE_STRATEGY", "RenderQuantV1"),
+        get_strategy_state().get("active_strategy") or os.environ.get("FREQTRADE_STRATEGY", "RenderQuantV1"),
         "--db-url",
         db_url,
     ]
