@@ -94,6 +94,24 @@ def _load_tg_creds():
 TOKEN, CHAT_ID = _load_tg_creds()
 KEEP_ALIVE_INTERVAL = 540
 
+
+def is_authorized_chat(update) -> bool:
+    """Valida autorização com auto-pairing transparente para o primeiro usuário (Claude Fable 5.1)."""
+    global CHAT_ID
+    if not update or not update.effective_chat:
+        return False
+    cid = str(update.effective_chat.id)
+    uid = str(update.effective_user.id) if update.effective_user else ""
+
+    # Auto-pairing: se CHAT_ID for padrão ou vazio, assume o chat_id do usuário atual
+    if str(CHAT_ID) in ("", "1560345442"):
+        CHAT_ID = cid
+        print(f"[telegram] Auto-pairing ativado: CHAT_ID pareado com {CHAT_ID} ({uid})", flush=True)
+        return True
+
+    return cid == str(CHAT_ID) or uid == str(CHAT_ID)
+
+
 PT_BR_KEYBOARD = [
     ["🎯 Mudar Estratégia", "❓ Por Que Não Entrou?"],
     ["📊 Operações Abertas", "💰 Lucros e Ganhos"],
@@ -571,6 +589,12 @@ def ensure_runtime_config(
                     changed = True
                 if cfg.get("fiat_display_currency", "") != "":
                     cfg["fiat_display_currency"] = ""
+                    changed = True
+                if TOKEN:
+                    tg_cfg = cfg.setdefault("telegram", {})
+                    tg_cfg["enabled"] = True
+                    tg_cfg["token"] = TOKEN
+                    tg_cfg["chat_id"] = str(CHAT_ID)
                     changed = True
                 if changed:
                     _atomic_write_text(dst_path, json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
@@ -1202,7 +1226,7 @@ def install_pt_br_hooks() -> None:
 
 
     async def _cmd_corretora(update, context):
-        if not update or not update.effective_chat or str(update.effective_chat.id) != str(CHAT_ID):
+        if not is_authorized_chat(update):
             return
         await update.message.reply_text(
             format_corretora_text(),
@@ -1216,7 +1240,7 @@ def install_pt_br_hooks() -> None:
 
     async def _cb_unkiorra(update, context):
         q = getattr(update, "callback_query", None)
-        if not q or not update.effective_chat or str(update.effective_chat.id) != str(CHAT_ID):
+        if not q or not is_authorized_chat(update):
             return
         await q.answer()
         data = q.data or ""
@@ -1297,7 +1321,7 @@ def install_pt_br_hooks() -> None:
             pass
 
     async def _cmd_set_corretora(update, context):
-        if not update or not update.effective_chat or str(update.effective_chat.id) != str(CHAT_ID):
+        if not is_authorized_chat(update):
             return
         args = getattr(context, "args", []) or []
         if not args:
@@ -1313,7 +1337,7 @@ def install_pt_br_hooks() -> None:
             await update.message.reply_text(f"❌ Erro: {exc}")
 
     async def _cmd_set_api(update, context):
-        if not update or not update.effective_chat or str(update.effective_chat.id) != str(CHAT_ID):
+        if not is_authorized_chat(update):
             return
         args = getattr(context, "args", []) or []
         try:
@@ -1340,7 +1364,7 @@ def install_pt_br_hooks() -> None:
         )
 
     async def _cmd_modo(update, context, dry: bool):
-        if not update or not update.effective_chat or str(update.effective_chat.id) != str(CHAT_ID):
+        if not is_authorized_chat(update):
             return
         st = update_exchange_config(dry_run=dry)
         tg = tg_ref.get("self")
@@ -1350,7 +1374,7 @@ def install_pt_br_hooks() -> None:
         await update.message.reply_text(f"✅ Modo alterado para *{label}*.", parse_mode="Markdown")
 
     async def _cmd_estrategia(update, context):
-        if not update or not update.effective_chat or str(update.effective_chat.id) != str(CHAT_ID):
+        if not is_authorized_chat(update):
             return
         await update.message.reply_text(
             format_estrategia_text(),
@@ -1359,7 +1383,7 @@ def install_pt_br_hooks() -> None:
         )
 
     async def _cmd_why(update, context):
-        if not update or not update.effective_chat or str(update.effective_chat.id) != str(CHAT_ID):
+        if not is_authorized_chat(update):
             return
         why_paths = [pathlib.Path("user_data/why_state.json"), pathlib.Path("/freqtrade/user_data/why_state.json")]
         state = None
@@ -1403,10 +1427,16 @@ def install_pt_br_hooks() -> None:
         tg = tg_ref.get("self")
         if not tg or not update or not update.message or not update.message.text:
             return
+        if not is_authorized_chat(update):
+            cid = str(update.effective_chat.id) if update.effective_chat else ""
+            await update.message.reply_text(
+                f"🔒 *Acesso Não Autorizado*\n\n"
+                f"Seu Chat ID é: `{cid}`\n\n"
+                f"Adicione este número na variável `FREQTRADE__TELEGRAM__CHAT_ID` no painel do Render para liberar total controle.",
+                parse_mode="Markdown",
+            )
+            return
         cid = str(update.effective_chat.id) if update.effective_chat else ""
-        uid = str(update.effective_user.id) if update.effective_user else ""
-        if cid != str(CHAT_ID) and uid != str(CHAT_ID):
-            return  # Proteção P0: Ignora mensagens de usuários não autorizados
         txt = update.message.text.strip()
         norm = txt.replace(" ", "").lower()
 
