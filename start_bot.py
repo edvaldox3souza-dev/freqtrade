@@ -159,10 +159,10 @@ PT_BR_BUTTON_MAP = {
 WELCOME_PT_BR = (
     "🤖 *Unkiorra Trade Bot*\n\n"
     "✅ *Robô Ativo:* Monitorando oportunidades em tempo real\n"
-    "🏦 *Corretora:* Kraken (`Pares USD` | `RenderQuantV1` `15m`)\n"
+    "🏦 *Corretora:* Kraken (`Pares Spot` | `RenderQuantV3_Defensive` `4h`)\n"
     "🛡️ *Modo:* Simulação (`Dry-Run` — Carteira Virtual: `1000 USD`)\n"
     "🧠 *Guardião IA:* Claude Fable 5.1 Ativo (`/ia` ou toque em 🧠 Guardião IA)\n"
-    "⚡ *Proteção de Capital:* Ativa (`KER` + `Trailing Stop Pós-Taxas`)\n\n"
+    "⚡ *Proteção de Capital:* Ativa (`Mean Reversion` + `StoplossGuard` + `MaxDrawdown`)\n\n"
     "👇 *Toque nos botões abaixo para controlar o robô:*"
 )
 
@@ -629,9 +629,18 @@ def ensure_runtime_config(
                         print("PT-BR_BOOT_STRATEGY_WARN:", exc, flush=True)
                 # FIX 2: chaves da corretora via env vars (persistentes na Render,
                 # sobrevivem a sleep/redeploy). Env tem prioridade sobre /tmp.
-                env_key = os.environ.get("EXCHANGE_KEY", "").strip()
-                env_secret = os.environ.get("EXCHANGE_SECRET", "").strip()
-                env_pass = os.environ.get("EXCHANGE_PASSWORD", "").strip()
+                env_key = (
+                    os.environ.get("EXCHANGE_KEY", "").strip()
+                    or os.environ.get("FREQTRADE__EXCHANGE__KEY", "").strip()
+                )
+                env_secret = (
+                    os.environ.get("EXCHANGE_SECRET", "").strip()
+                    or os.environ.get("FREQTRADE__EXCHANGE__SECRET", "").strip()
+                )
+                env_pass = (
+                    os.environ.get("EXCHANGE_PASSWORD", "").strip()
+                    or os.environ.get("FREQTRADE__EXCHANGE__PASSWORD", "").strip()
+                )
                 ex_cfg = cfg.setdefault("exchange", {})
                 if env_key and ex_cfg.get("key") != env_key:
                     ex_cfg["key"] = env_key
@@ -711,7 +720,7 @@ def get_exchange_status(dst_path: pathlib.Path = RUNTIME_CONFIG_PATH) -> dict:
         "has_passphrase": bool(ex.get("password")),
         "dry_run": bool(cfg.get("dry_run", True)),
         "stoploss_on_exchange": on_exchange,
-        "pair_whitelist": ex.get("pair_whitelist", ["BTC/USD", "ETH/USD"]),
+        "pair_whitelist": ex.get("pair_whitelist", ["BTC/USDT", "ETH/USDT"]),
     }
 
 
@@ -732,9 +741,10 @@ def update_exchange_config(
             if not cleaned:
                 raise ValueError("Nome de corretora inválido")
             ex["name"] = cleaned
-            target_stake = "USD" if cleaned == "kraken" else "USDT"
+            curr_stake = cfg.get("stake_currency", "")
+            target_stake = curr_stake if curr_stake in ("USD", "USDT") else ("USD" if cleaned == "kraken" else "USDT")
             cfg["stake_currency"] = target_stake
-            old_pairs = ex.get("pair_whitelist", ["BTC/USD", "ETH/USD"])
+            old_pairs = ex.get("pair_whitelist", ["BTC/USDT", "ETH/USDT"])
             ex["pair_whitelist"] = [
                 re.sub(r"/(USD|USDT)$", f"/{target_stake}", p) for p in old_pairs
             ]
@@ -898,7 +908,7 @@ def build_estrategia_inline_markup():
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
     st = get_strategy_state()
-    active = st.get("active_strategy", "RenderQuantV1")
+    active = st.get("active_strategy", "RenderQuantV3_Defensive")
     rows = []
     for s_name, label in AVAILABLE_STRATEGIES:
         mark = "✅" if s_name == active else "⬜"
@@ -909,7 +919,7 @@ def build_estrategia_inline_markup():
 
 def format_estrategia_text() -> str:
     st = get_strategy_state()
-    active = st.get("active_strategy", "RenderQuantV1")
+    active = st.get("active_strategy", "RenderQuantV3_Defensive")
     ts = st.get("updated_at", time.strftime("%H:%M:%S"))
     is_v2 = (active == "RenderQuantV2_Institutional")
     ker_min = "0.42 (Rigor Extremo)" if is_v2 else "0.35 (Equilibrado)"
@@ -1704,6 +1714,12 @@ def install_pt_br_hooks() -> None:
         mode_str = "Simulado (Dry-Run)" if st.get("dry_run", True) else "CONTA REAL"
         tok_masked = f"...{TOKEN[-5:]}" if len(TOKEN) > 5 else "NÃO CONFIGURADO"
         stop_nativo_diag = "🟢 ATIVO no Livro da Corretora (intervalo 60s)" if st.get("stoploss_on_exchange") else "🟡 Stop Local (Monitorado pelo Bot)"
+        active_strat = "RenderQuantV3_Defensive"
+        try:
+            st_strat = get_strategy_state()
+            active_strat = st_strat.get("active_strategy", "RenderQuantV3_Defensive")
+        except Exception:
+            pass
         diag_msg = (
             "🩺 *Diagnóstico Forense do Sistema (Freqtrade + Render)*\n\n"
             f"• *Telegram RPC:* {'✅ Ativo e Operacional' if TOKEN else '❌ Desativado (Sem Token)'}\n"
@@ -1712,7 +1728,7 @@ def install_pt_br_hooks() -> None:
             f"• *Modo de Operação:* `{mode_str}`\n"
             f"• *Corretora:* `{st.get('exchange', 'kraken').upper()}`\n"
             f"• *Stop-Loss na Corretora:* `{stop_nativo_diag}`\n"
-            f"• *Estratégia:* `RenderQuantV1` (Alpha Triad)\n"
+            f"• *Estratégia:* `{active_strat}` (4h Mean Reversion — Validada 600d)\n"
             f"• *Watchdogs:* RAM (420MB) + Neon Anti-Sleep Ativos\n\n"
             "💡 _Seu bot está respondendo normalmente aos comandos._"
         )

@@ -127,7 +127,7 @@ class RenderQuantV3_Defensive(IStrategy):
         proposed_stake: float, min_stake: Optional[float], max_stake: float,
         leverage: float, entry_tag: Optional[str], side: str, **kwargs: Any,
     ) -> float:
-        """Risk parity: 1% da banca por trade, cap 10% (identico ao backtest vencedor)."""
+        """Risk parity: 1% da banca por trade, cap 10% (identico ao backtest vencedor), com fallback seguro para ordermin."""
         total_wallet = max(float(max_stake), float(proposed_stake), 0.0)
         if self.wallets is not None:
             try:
@@ -137,7 +137,11 @@ class RenderQuantV3_Defensive(IStrategy):
         stop_d = 0.05 + 0.0062  # stop 5% + round-trip estimado
         stake = min((total_wallet * 0.01) / stop_d, total_wallet * 0.10, float(max_stake))
         if min_stake is not None and stake < float(min_stake):
-            return 0.0
+            # Se a carteira cobre a ordem mínima da corretora, permite stake = min_stake
+            if float(min_stake) <= total_wallet:
+                stake = float(min_stake)
+            else:
+                return 0.0
         if not np.isfinite(stake) or stake <= 0:
             return 0.0
         return round(float(stake), 8)
@@ -174,8 +178,11 @@ class RenderQuantV3_Defensive(IStrategy):
                 sl = getattr(t, "stop_loss_or_limit", None) or (t.open_rate or 0) * 0.95
                 open_heat += abs((t.open_rate or 0) - sl) * float(getattr(t, "amount", 0) or 0)
             incoming = 0.05 * float(amount) * float(rate)
-            if (open_heat + incoming) / max(total_balance, 10.0) > 0.03:
-                logger.warning("V3 [HEAT VETO]: heat projetado acima de 3%% - %s vetada", pair)
+            # Para bancas institucionais (> $50), heat cap rigoroso de 3%.
+            # Para micro-bancas (< $50), heat cap de 6% para acomodar 1 posicao minima de exchange.
+            max_heat = 0.06 if total_balance < 50.0 else 0.03
+            if (open_heat + incoming) / max(total_balance, 10.0) > max_heat:
+                logger.warning("V3 [HEAT VETO]: heat projetado acima de %.2f%% - %s vetada", max_heat * 100, pair)
                 return False
         except Exception as exc:
             logger.error("V3 [FAIL-CLOSED]: erro no gate de risco (%s) - %s vetada", exc, pair)

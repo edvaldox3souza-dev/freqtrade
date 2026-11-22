@@ -3,7 +3,7 @@
   "user_data_dir": "/freqtrade/user_data",
   "strategy_path": "/freqtrade/user_data/strategies",
   "max_open_trades": 3,
-  "stake_currency": "USD",
+  "stake_currency": "USDT",
   "stake_amount": "unlimited",
   "tradable_balance_ratio": 0.99,
   "fiat_display_currency": "",
@@ -45,12 +45,12 @@
     },
     "ccxt_async_config": {},
     "pair_whitelist": [
-      "BTC/USD",
-      "ETH/USD",
-      "SOL/USD",
-      "XRP/USD",
-      "ADA/USD",
-      "LINK/USD"
+      "BTC/USDT",
+      "ETH/USDT",
+      "SOL/USDT",
+      "XRP/USDT",
+      "ADA/USDT",
+      "LINK/USDT"
     ],
     "pair_blacklist": []
   },
