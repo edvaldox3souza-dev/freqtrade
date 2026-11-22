@@ -707,7 +707,7 @@ def get_exchange_status(dst_path: pathlib.Path = RUNTIME_CONFIG_PATH) -> dict:
         "has_passphrase": bool(ex.get("password")),
         "dry_run": bool(cfg.get("dry_run", True)),
         "stoploss_on_exchange": on_exchange,
-        "pair_whitelist": ex.get("pair_whitelist", ["BTC/USDT", "ETH/USDT"]),
+        "pair_whitelist": ex.get("pair_whitelist", ["BTC/USD", "ETH/USD"]),
     }
 
 
