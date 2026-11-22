@@ -600,6 +600,13 @@ def ensure_runtime_config(
                 # FIX 1: força sempre a estratégia ativa do strategy_state no boot.
                 # Sem isto, uma runtime config sem "strategy" faz o freqtrade cair
                 # no fallback SimpleStrategy (template 5m) — bug observado em produção.
+                # FIX 5 (user_data_dir): grava o user_data_dir na runtime config para o
+                # resolver buscar as estrategias custom em /freqtrade/user_data/strategies
+                # (sem isto o lookup path cai no default "freqtrade/templates" -> SampleStrategy).
+                if cfg.get("user_data_dir") != "/freqtrade/user_data":
+                    cfg["user_data_dir"] = "/freqtrade/user_data"
+                    changed = True
+                    print("PT-BR_BOOT_USERDIR_FORCE: /freqtrade/user_data", flush=True)
                 # FIX 1b: env var FREQTRADE_STRATEGY tem prioridade absoluta (override P0).
                 env_strategy = os.environ.get("FREQTRADE_STRATEGY", "").strip()
                 if env_strategy and cfg.get("strategy") != env_strategy:
@@ -2067,26 +2074,25 @@ def main() -> None:
     start_neon_heartbeat(db_url)
 
     os.environ["FREQTRADE__API_SERVER__LISTEN_PORT"] = os.environ.get("PORT", "10000")
-    # Correção P0: Remove --strategy dinâmico, mas garante estratégia correta no boot
-    # via override explícito (precedência máxima do freqtrade), evitando fallback
-    # para SampleStrategy observado em produção. Reload posterior usa runtime_config
-    # (que o FIX 1 do ensure_runtime_config também força com a estratégia ativa).
+    # Correção definitiva: TODOS os overrides entram na runtime config + env nativas.
+    # O mecanismo nativo FREQTRADE__* do freqtrade (EnvironmentVariables) tem a
+    # maior precedência comprovada em produção (log: "Loading variable
+    # 'FREQTRADE__STRATEGY'"). Env vars nativas dispensam argv por completo.
     try:
         boot_strategy = os.environ.get("FREQTRADE_STRATEGY", "").strip() or get_strategy_state().get("active_strategy", "RenderQuantV3_Defensive")
     except Exception:
         boot_strategy = "RenderQuantV3_Defensive"
+    os.environ["FREQTRADE__STRATEGY"] = boot_strategy
+    if db_url:
+        os.environ["FREQTRADE__DB_URL"] = db_url
     print("PT-BR_BOOT_STRATEGY_ARGV:", boot_strategy, flush=True)
+    # Config mínima: freqtrade lê user_data_dir, strategy, db_url e todos os
+    # overrides das env vars nativas FREQTRADE__* (comprovadas nos logs).
     sys.argv = [
         "freqtrade",
         "trade",
         "--config",
         str(ensure_runtime_config()),
-        "--userdir",
-        "/freqtrade/user_data",
-        "--strategy",
-        boot_strategy,
-        "--db-url",
-        db_url,
     ]
     # FIX 4 (auditoria): dump do estado final antes de entregar ao freqtrade.
     # Se a estratégia divergir daqui para frente, a causa é pós-argv (reload interno).
