@@ -607,6 +607,10 @@ def ensure_runtime_config(
                     cfg["user_data_dir"] = "/freqtrade/user_data"
                     changed = True
                     print("PT-BR_BOOT_USERDIR_FORCE: /freqtrade/user_data", flush=True)
+                if cfg.get("strategy_path") != "/freqtrade/user_data/strategies":
+                    cfg["strategy_path"] = "/freqtrade/user_data/strategies"
+                    changed = True
+                    print("PT-BR_BOOT_STRATEGY_PATH_FORCE: /freqtrade/user_data/strategies", flush=True)
                 # FIX 1b: env var FREQTRADE_STRATEGY tem prioridade absoluta (override P0).
                 env_strategy = os.environ.get("FREQTRADE_STRATEGY", "").strip()
                 if env_strategy and cfg.get("strategy") != env_strategy:
@@ -1973,18 +1977,26 @@ def install_sqlalchemy_neon_pool_hooks() -> None:
     """Injeta pool_pre_ping e pool_recycle no SQLAlchemy contra cold-sleep do Neon (Claude Fable 5.1)."""
     try:
         import sqlalchemy
+        from sqlalchemy import event
 
         orig_create_engine = sqlalchemy.create_engine
 
         def robust_create_engine(*args, **kwargs):
             kwargs.setdefault("pool_pre_ping", True)
-            kwargs.setdefault("pool_recycle", 300)
+            kwargs.setdefault("pool_recycle", 180)
             kwargs.setdefault("pool_size", 5)
             kwargs.setdefault("max_overflow", 10)
-            return orig_create_engine(*args, **kwargs)
+            engine = orig_create_engine(*args, **kwargs)
+
+            @event.listens_for(engine, "handle_error")
+            def _handle_db_error(context):
+                if context.is_disconnect:
+                    print("[db] Neon disconnect interceptado - reconexao via pre-ping garantida.", flush=True)
+
+            return engine
 
         sqlalchemy.create_engine = robust_create_engine
-        print("SQLAlchemy Neon resilient pool hooks installed (pool_pre_ping=True, pool_recycle=300)!", flush=True)
+        print("SQLAlchemy Neon resilient pool hooks installed (pool_pre_ping=True, pool_recycle=180)!", flush=True)
     except Exception as exc:
         print("SQLAlchemy pool hook warning:", exc, flush=True)
 
@@ -2015,7 +2027,7 @@ def start_ram_watchdog(interval: int = 60, soft_limit_mb: int = 420) -> None:
     print("[watchdog] Monitor de Memória RAM ativo (Soft cap 420MB)!", flush=True)
 
 
-def start_neon_heartbeat(db_url: str, interval: int = 240) -> None:
+def start_neon_heartbeat(db_url: str, interval: int = 180) -> None:
     """Executa SELECT 1 a cada 4min para impedir que o Neon Postgres entre em suspensão."""
     if not db_url or "postgres" not in db_url:
         return
@@ -2093,6 +2105,14 @@ def main() -> None:
         "trade",
         "--config",
         str(ensure_runtime_config()),
+        "--strategy",
+        boot_strategy,
+        "--strategy-path",
+        "/freqtrade/user_data/strategies",
+        "--userdir",
+        "/freqtrade/user_data",
+        "--db-url",
+        db_url,
     ]
     # FIX 6 (à prova de balas): re-lê e hard-set direto na runtime config com marcador
     # único de bot_name. Se show_config reportar este nome, a config foi escrita por

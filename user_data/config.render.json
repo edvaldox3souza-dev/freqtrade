@@ -1,5 +1,7 @@
 {
-  "bot_name": "Unkiorra RenderQuantV1",
+  "bot_name": "Unkiorra RenderQuantV3",
+  "user_data_dir": "/freqtrade/user_data",
+  "strategy_path": "/freqtrade/user_data/strategies",
   "max_open_trades": 3,
   "stake_currency": "USD",
   "stake_amount": "unlimited",

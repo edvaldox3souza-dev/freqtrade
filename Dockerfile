@@ -10,7 +10,7 @@ WORKDIR /freqtrade
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     MALLOC_ARENA_MAX=2 \
-    BOOT_VERSION=20261122_fix_cache_invalidation
+    BOOT_VERSION=20261122_v4_clean_boot_no_secrets
 
 RUN pip install --no-cache-dir psycopg2-binary
 
