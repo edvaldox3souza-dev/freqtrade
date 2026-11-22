@@ -587,7 +587,11 @@ def ensure_runtime_config(
     dst_path: pathlib.Path = RUNTIME_CONFIG_PATH,
 ) -> pathlib.Path:
     with _RUNTIME_CFG_LOCK:
-        if not dst_path.exists() and src_path.exists():
+        # FIX 3 (cache/drift): no boot, SEMPRE reescreve a runtime config a partir
+        # da config-fonte do repo. O /tmp é volátil e pode conter uma config antiga
+        # (sem "strategy", com defaults) que sobrevive entre restarts — causa raiz
+        # observada em produção. Overlays (env vars, telegram) são reaplicados abaixo.
+        if src_path.exists():
             _atomic_write_text(dst_path, src_path.read_text(encoding="utf-8"))
         if dst_path.exists():
             try:
@@ -2068,6 +2072,21 @@ def main() -> None:
         "--db-url",
         db_url,
     ]
+    # FIX 4 (auditoria): dump do estado final antes de entregar ao freqtrade.
+    # Se a estratégia divergir daqui para frente, a causa é pós-argv (reload interno).
+    try:
+        _cfg = json.loads(RUNTIME_CONFIG_PATH.read_text(encoding="utf-8")) if RUNTIME_CONFIG_PATH.exists() else {}
+        _db_masked = db_url.split("@")[-1] if "@" in db_url else "***"
+        print(
+            f"PT-BR_BOOT_AUDIT: pid={os.getpid()} strategy={_cfg.get('strategy')!r} "
+            f"argv_strategy={boot_strategy!r} max_open_trades={_cfg.get('max_open_trades')} "
+            f"stake_currency={_cfg.get('stake_currency')} exchange={_cfg.get('exchange', {}).get('name')} "
+            f"pairs={len(_cfg.get('exchange', {}).get('pair_whitelist', []))} "
+            f"argv={sys.argv} db@{_db_masked}",
+            flush=True,
+        )
+    except Exception as exc:
+        print("PT-BR_BOOT_AUDIT_WARN:", exc, flush=True)
     ft_main()
 
 
