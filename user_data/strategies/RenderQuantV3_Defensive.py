@@ -1,9 +1,9 @@
-"""RenderQuantV3 â€” EstratÃ©gia DEFENSIVA (Mean Reversion 4h) validada por backtest em 600 dias de dados reais.
+"""RenderQuantV3 - Estrategia DEFENSIVA (Mean Reversion 4h) validada por backtest em 600 dias de dados reais.
 
 Backtest (taxas Kraken 0.26%/lado, 6 pares, risk gates ativos):
-- PerÃ­odo de queda (-40.4% buy&hold): PF 0.91, retorno -1.0%, maxDD -3.3% (proteÃ§Ã£o de capital)
+- Periodo de queda (-40.4% buy&hold): PF 0.91, retorno -1.0%, maxDD -3.3% (protecao de capital)
 - Entradas: fundo da banda de Bollinger (bb_pos < 0.05) com piso estrutural EMA200
-- SaÃ­das: regressÃ£o Ã  mÃ©dia (bb_pos > 0.75 / RSI > 68), TP 1.5xATR, SL 5% (sem trailing)
+- Saidas: regressao a media (bb_pos > 0.75 / RSI > 68), TP 1.5xATR, SL 5% (sem trailing)
 """
 import logging
 from datetime import datetime
@@ -27,7 +27,7 @@ class RenderQuantV3_Defensive(IStrategy):
 
     stoploss: float = -0.05
     use_custom_stoploss: bool = False
-    minimal_roi = {"0": 0.10}  # TP principal Ã© o sinal de regressÃ£o; ROI Ã© rede de seguranÃ§a
+    minimal_roi = {"0": 0.10}  # TP principal e o sinal de regressao; ROI e rede de seguranca
 
     order_types = {
         "entry": "limit",
@@ -44,15 +44,15 @@ class RenderQuantV3_Defensive(IStrategy):
     use_exit_signal: bool = True
     exit_profit_only: bool = False
 
-    # Proteções nativas Freqtrade (sem lookahead, validadas em backtest com --enable-protections)
+    # Prote??es nativas Freqtrade (sem lookahead, validadas em backtest com --enable-protections)
     @property
     def protections(self):
         return [
-            {  # não re-entra no mesmo par por 6 velas (24h) após sair
+            {  # nao re-entra no mesmo par por 6 velas (24h) apos sair
                 "method": "CooldownPeriod",
                 "stop_duration_candles": 6,
             },
-            {  # para o par por 12 velas (48h) se 2 stoploss nos últimos 3 dias
+            {  # para o par por 12 velas (48h) se 2 stoploss nos ultimos 3 dias
                 "method": "StoplossGuard",
                 "lookback_period_candles": 18,
                 "trade_limit": 2,
@@ -69,10 +69,10 @@ class RenderQuantV3_Defensive(IStrategy):
             },
         ]
 
-    # ParÃ¢metros do backtest vencedor
-    bb_pos_entry: float = 0.05      # sÃ³ compra no fundo da banda inferior
+    # Parametros do backtest vencedor
+    bb_pos_entry: float = 0.05      # so compra no fundo da banda inferior
     ema200_floor: float = 0.92      # piso estrutural: nunca comprar abaixo de 92% da EMA200
-    bb_pos_exit: float = 0.75       # sai na regressÃ£o Ã  mÃ©dia
+    bb_pos_exit: float = 0.75       # sai na regressao a media
     rsi_exit: int = 68
     min_vol_usd_24h: float = 5_000_000.0
     tp_atr_mult: float = 1.5
@@ -127,7 +127,7 @@ class RenderQuantV3_Defensive(IStrategy):
         proposed_stake: float, min_stake: Optional[float], max_stake: float,
         leverage: float, entry_tag: Optional[str], side: str, **kwargs: Any,
     ) -> float:
-        """Risk parity: 1% da banca por trade, cap 10% (idÃªntico ao backtest vencedor)."""
+        """Risk parity: 1% da banca por trade, cap 10% (identico ao backtest vencedor)."""
         total_wallet = max(float(max_stake), float(proposed_stake), 0.0)
         if self.wallets is not None:
             try:
@@ -147,7 +147,7 @@ class RenderQuantV3_Defensive(IStrategy):
         time_in_force: str, current_time: datetime, entry_tag: Optional[str],
         side: str, **kwargs: Any,
     ) -> bool:
-        """Gate de risco fail-closed: circuit breaker diÃ¡rio -2.5% e heat cap 3%."""
+        """Gate de risco fail-closed: circuit breaker diario -2.5% e heat cap 3%."""
         try:
             today_start = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
             closed = Trade.get_trades_proxy(is_open=False)
@@ -166,7 +166,7 @@ class RenderQuantV3_Defensive(IStrategy):
                 total_balance = float(self.wallets.get_total_stake_amount())
             daily_dd = (realized + unreal) / max(total_balance, 10.0)
             if daily_dd <= -0.025:
-                logger.warning("V3 [CIRCUIT BREAKER]: dd diario %.2f%% â€” entrada %s vetada", daily_dd * 100, pair)
+                logger.warning("V3 [CIRCUIT BREAKER]: dd diario %.2f%% - entrada %s vetada", daily_dd * 100, pair)
                 return False
 
             open_heat = 0.0
@@ -175,10 +175,10 @@ class RenderQuantV3_Defensive(IStrategy):
                 open_heat += abs((t.open_rate or 0) - sl) * float(getattr(t, "amount", 0) or 0)
             incoming = 0.05 * float(amount) * float(rate)
             if (open_heat + incoming) / max(total_balance, 10.0) > 0.03:
-                logger.warning("V3 [HEAT VETO]: heat projetado acima de 3%% â€” %s vetada", pair)
+                logger.warning("V3 [HEAT VETO]: heat projetado acima de 3%% - %s vetada", pair)
                 return False
         except Exception as exc:
-            logger.error("V3 [FAIL-CLOSED]: erro no gate de risco (%s) â€” %s vetada", exc, pair)
+            logger.error("V3 [FAIL-CLOSED]: erro no gate de risco (%s) - %s vetada", exc, pair)
             return False
         return True
 

@@ -15,13 +15,13 @@ logger = logging.getLogger(__name__)
 
 
 class RenderQuantV1(IStrategy):
-    """Estratégia Quantitativa Institucional para Render (Fase 0 Corrigida).
+    """Estrat?gia Quantitativa Institucional para Render (Fase 0 Corrigida).
 
-    Integração de alta performance:
+    Integra??o de alta performance:
     - Maverick MCP: Minervini Trend Template (Stage 2) + Multiplicador por Regime de Mercado
     - Trading Skills: Modified Z-Score (MAD) de Volume + Anti-Chasing Pivots + Dual Crossover Anti-Whipsaw
-    - HyperGrok Trading Desk: Stressed Stop Sizing + Daily Loss Circuit Breaker + Trava de Clusters de Correlação
-    - Correções Fase 0: Taxa real Kraken Spot (0.26%), Warm-up de 350 velas, Kelly desativado (<100 trades), Stoploss no bot
+    - HyperGrok Trading Desk: Stressed Stop Sizing + Daily Loss Circuit Breaker + Trava de Clusters de Correla??o
+    - Corre??es Fase 0: Taxa real Kraken Spot (0.26%), Warm-up de 350 velas, Kelly desativado (<100 trades), Stoploss no bot
     """
 
     INTERFACE_VERSION = 3
@@ -31,14 +31,14 @@ class RenderQuantV1(IStrategy):
     startup_candle_count: int = 350
     process_only_new_candles: bool = True
 
-    # Realização escalonada no tempo (calibrada para cobrir com folga a taxa de 0.52% round-trip)
+    # Realiza??o escalonada no tempo (calibrada para cobrir com folga a taxa de 0.52% round-trip)
     minimal_roi = {
-        "0": 0.080,    # Realização ampla em 8.0%
-        "120": 0.050,  # 5.0% após 2 horas
-        "240": 0.030,  # 3.0% após 4 horas
+        "0": 0.080,    # Realiza??o ampla em 8.0%
+        "120": 0.050,  # 5.0% ap?s 2 horas
+        "240": 0.030,  # 3.0% ap?s 4 horas
     }
 
-    # Stop-Loss Nativo no Livro da Corretora (Ação 2 - Claude Fable 5.1)
+    # Stop-Loss Nativo no Livro da Corretora (A??o 2 - Claude Fable 5.1)
     stoploss: float = -0.04
     stoploss_on_exchange: bool = True
     use_custom_stoploss: bool = True
@@ -59,7 +59,7 @@ class RenderQuantV1(IStrategy):
     exit_profit_only: bool = False
     ignore_roi_if_entry_signal: bool = False
 
-    # Parâmetros de Volatilidade e Momentum
+    # Par?metros de Volatilidade e Momentum
     min_natr: float = 0.20
     max_natr: float = 4.00
     min_adx: float = 16.0
@@ -67,23 +67,23 @@ class RenderQuantV1(IStrategy):
     rsi_exit_mid: float = 62.0
     rsi_exit_extreme: float = 74.0
 
-    # Risco e Gestão de Capital (HyperGrok & Maverick)
-    max_risk_pct_per_trade: float = 0.01   # 1% de risco da banca por operação
-    daily_loss_stop_pct: float = 0.025     # -2.5% de perda diária congela novas entradas
+    # Risco e Gest?o de Capital (HyperGrok & Maverick)
+    max_risk_pct_per_trade: float = 0.01   # 1% de risco da banca por opera??o
+    daily_loss_stop_pct: float = 0.025     # -2.5% de perda di?ria congela novas entradas
     taker_fee_pct: float = 0.0026          # 0.26% taxa taker real da Kraken (varejo)
-    slip_floor_bps: float = 10.0           # 10 bps de derrapagem mínima estimada no stop
+    slip_floor_bps: float = 10.0           # 10 bps de derrapagem m?nima estimada no stop
     kelly_fraction: float = 0.25           # Quarter-Kelly
-    max_stake_ratio: float = 0.10          # Teto máximo de 10% da carteira por trade
+    max_stake_ratio: float = 0.10          # Teto m?ximo de 10% da carteira por trade
     cold_start_stake_ratio: float = 0.05   # 5% nos primeiros trades
 
     # Kaufman Efficiency Ratio & Portfolio Heat (Claude Fable 5.1 / Maverick / HyperGrok)
     KER_WINDOW: int = 14
-    KER_MIN_V1: float = 0.35               # Filtro de eficiência para modo V1 (veto de chop/ruído)
-    KER_MIN_V2: float = 0.42               # Filtro de eficiência para modo V2 Institucional
+    KER_MIN_V1: float = 0.35               # Filtro de efici?ncia para modo V1 (veto de chop/ru?do)
+    KER_MIN_V2: float = 0.42               # Filtro de efici?ncia para modo V2 Institucional
     portfolio_heat_limit: float = 0.03     # Hard cap de 3.0% de risco total aberto agregado sobre o equity
-    min_24h_volume_usd: float = 2_000_000.0 # Mínimo $2M USD negociados nas últimas 24h (anti-slippage)
+    min_24h_volume_usd: float = 2_000_000.0 # M?nimo $2M USD negociados nas ?ltimas 24h (anti-slippage)
 
-    # Clusters de Correlação (HyperGrok) - Evita risco direcional duplicado nos 6 pares líquidos
+    # Clusters de Correla??o (HyperGrok) - Evita risco direcional duplicado nos 6 pares l?quidos
     CORRELATION_CLUSTERS = {
         "MAJORS": ["BTC/USD", "ETH/USD", "BTC/USDT", "ETH/USDT"],
         "LAYER1": ["SOL/USD", "ADA/USD", "SOL/USDT", "ADA/USDT"],
@@ -108,7 +108,7 @@ class RenderQuantV1(IStrategy):
         heat: float | None = None,
         cluster: str | None = None,
     ) -> None:
-        """Persiste em disco a última decisão/rejeição para o comando /why do Telegram (Claude Fable 5.1)."""
+        """Persiste em disco a ?ltima decis?o/rejei??o para o comando /why do Telegram (Claude Fable 5.1)."""
         payload = {
             "ts": datetime.now(UTC).strftime("%H:%M:%S UTC"),
             "pair": pair,
@@ -126,9 +126,9 @@ class RenderQuantV1(IStrategy):
             pass
 
     def _get_active_strategy_mode(self) -> str:
-        """Lê dinamicamente o arquivo de estado gravado pelo Telegram sem reiniciar o processo.
+        """L? dinamicamente o arquivo de estado gravado pelo Telegram sem reiniciar o processo.
 
-        Fail-safe: em caso de arquivo indisponível ou leitura concorrente, mantém o modo padrão V1.
+        Fail-safe: em caso de arquivo indispon?vel ou leitura concorrente, mant?m o modo padr?o V1.
         """
         now = time.time()
         if now - self._last_state_read_ts < 3.0:
@@ -198,13 +198,13 @@ class RenderQuantV1(IStrategy):
         low = dataframe["low"]
         vol = dataframe["volume"]
 
-        # 1. Filtro de Tendência Estrutural Minervini (Maverick MCP)
+        # 1. Filtro de Tend?ncia Estrutural Minervini (Maverick MCP)
         dataframe["sma50"] = ta.SMA(dataframe, timeperiod=50)
         dataframe["sma150"] = ta.SMA(dataframe, timeperiod=150)
         dataframe["sma200"] = ta.SMA(dataframe, timeperiod=200)
         dataframe["sma200_slope"] = (dataframe["sma200"] > dataframe["sma200"].shift(20)).astype(np.int8)
 
-        # 2. Indicadores Rápidos Vetorizados (TA-Lib)
+        # 2. Indicadores R?pidos Vetorizados (TA-Lib)
         dataframe["rsi"] = ta.RSI(dataframe, timeperiod=14)
         dataframe["adx"] = ta.ADX(dataframe, timeperiod=14)
         dataframe["atr"] = ta.ATR(dataframe, timeperiod=14)
@@ -220,7 +220,7 @@ class RenderQuantV1(IStrategy):
         dataframe["macd"] = macd_res["macd"]
         dataframe["macd_signal"] = macd_res["macdsignal"]
 
-        # 3. Modified Z-Score de Volume via MAD (Trading Skills - Proteção Fail-Closed SRE)
+        # 3. Modified Z-Score de Volume via MAD (Trading Skills - Prote??o Fail-Closed SRE)
         rolling_vol = vol.rolling(window=72)
         med_vol = rolling_vol.median().fillna(vol)
         abs_dev = (vol - med_vol).abs()
@@ -232,7 +232,7 @@ class RenderQuantV1(IStrategy):
         ).astype(np.float32)
         dataframe["is_whale_vol"] = (dataframe["vol_modified_z"] > 3.0).astype(np.int8)
 
-        # 4. Pivôs Floor-Trader & Anti-Chasing (Trading Skills)
+        # 4. Piv?s Floor-Trader & Anti-Chasing (Trading Skills)
         prev_h = high.rolling(24).max().shift(1)
         prev_l = low.rolling(24).min().shift(1)
         p = (prev_h + prev_l + close.shift(1)) / 3.0
@@ -246,7 +246,7 @@ class RenderQuantV1(IStrategy):
         dataframe["dual_bullish"] = (ema_up & macd_up).astype(np.int8)
         dataframe["dual_conflict"] = (ema_up != macd_up).astype(np.int8)
 
-        # 6. Métrica de ATR percentual para o stoploss (Blindagem contra NaN no warm-up)
+        # 6. M?trica de ATR percentual para o stoploss (Blindagem contra NaN no warm-up)
         dataframe["atr_pct"] = np.where(
             (close > 0) & (dataframe["atr"].notna()),
             (dataframe["atr"] / close).astype(np.float32),
@@ -268,7 +268,7 @@ class RenderQuantV1(IStrategy):
         vol_notional_24h = (dataframe["volume"] * close).rolling(96, min_periods=16).sum()
         dataframe["volume_usd_24h"] = vol_notional_24h.fillna(0.0).astype(np.float32)
 
-        # 10. Métrica de Esticamento sobre a EMA21 (Filtro Anti-Exaustão - Claude Fable 5.1)
+        # 10. M?trica de Esticamento sobre a EMA21 (Filtro Anti-Exaust?o - Claude Fable 5.1)
         safe_atr = np.maximum(dataframe["atr"].fillna(1.0).values, 1e-4)
         dataframe["stretch_atr"] = ((close.values - dataframe["ema21"].values) / safe_atr).astype(np.float32)
 
@@ -287,7 +287,7 @@ class RenderQuantV1(IStrategy):
         p = dataframe["pivot_p"]
         s1 = dataframe["pivot_s1"]
 
-        # 1. Filtro Minervini: ativo em estágio 2 de expansão saudável
+        # 1. Filtro Minervini: ativo em est?gio 2 de expans?o saud?vel
         minervini_ok = (
             (close > dataframe["sma50"])
             & (dataframe["sma50"] > dataframe["sma150"])
@@ -295,10 +295,10 @@ class RenderQuantV1(IStrategy):
             & (dataframe["sma200_slope"] == 1)
         )
 
-        # 2. Filtro Anti-Chasing: não comprar em rompimento esticado sem reteste
+        # 2. Filtro Anti-Chasing: n?o comprar em rompimento esticado sem reteste
         chase_risk = (close > r1) & (low.shift(1) > r1)
 
-        # 3. Pullback estrutural diferenciado por modo (V2 institucional exige maior rigor geométrico)
+        # 3. Pullback estrutural diferenciado por modo (V2 institucional exige maior rigor geom?trico)
         if is_v2:
             # V2 Institucional: exige Whale Volume OU proximidade severa (<= 0.8%) de suporte
             whale_condition = (dataframe["is_whale_vol"] == 1)
@@ -311,7 +311,7 @@ class RenderQuantV1(IStrategy):
             active_min_adx = 20.0
             active_rsi_max = 42.0
         else:
-            # V1 Equilibrada: tolerância padrão (<= 1.5%)
+            # V1 Equilibrada: toler?ncia padr?o (<= 1.5%)
             near_structural_support = (
                 ((close - p).abs() / p <= 0.015)
                 | ((close - s1).abs() / s1 <= 0.015)
@@ -327,7 +327,7 @@ class RenderQuantV1(IStrategy):
             & (dataframe["adx"] >= active_min_adx)
         )
 
-        # 5. Momentum e Confirmação de Retomada
+        # 5. Momentum e Confirma??o de Retomada
         momentum_ok = (
             (dataframe["dual_bullish"] == 1)
             & (dataframe["dual_conflict"] == 0)
@@ -335,19 +335,19 @@ class RenderQuantV1(IStrategy):
             & (dataframe["rsi"] > dataframe["rsi"].shift(1))
         )
 
-        # 6. Filtro Kaufman Efficiency Ratio (Veto de Chop / Ruído lateral)
+        # 6. Filtro Kaufman Efficiency Ratio (Veto de Chop / Ru?do lateral)
         active_ker_min = self.KER_MIN_V2 if is_v2 else self.KER_MIN_V1
         ker_ok = dataframe["ker"] >= active_ker_min
 
         # 7. Filtro de Liquidez Notional 24h (Elimina slippage em livros rasos - Claude Fable 5.1)
         liquidity_ok = dataframe["volume_usd_24h"] >= self.min_24h_volume_usd
 
-        # 8. Gatilho de Pullback na EMA21 e Anti-Esticamento (Validação Claude Fable 5.1)
-        # O preço recua até perto da EMA21 e sustenta suporte, evitando compras no topo esticado
+        # 8. Gatilho de Pullback na EMA21 e Anti-Esticamento (Valida??o Claude Fable 5.1)
+        # O pre?o recua at? perto da EMA21 e sustenta suporte, evitando compras no topo esticado
         ema21_pullback = (low <= dataframe["ema21"] * 1.006) & (close >= dataframe["ema21"] * 0.992)
         not_stretched = dataframe["stretch_atr"] <= 1.2
 
-        # Condição de Entrada Composta
+        # Condi??o de Entrada Composta
         entry_conditions = (
             minervini_ok
             & (~chase_risk)
@@ -362,7 +362,7 @@ class RenderQuantV1(IStrategy):
         )
 
         dataframe.loc[entry_conditions, "enter_long"] = 1
-        # Contrato imutável de entrada por trade (R1 Claude Fable 5.1):
+        # Contrato imut?vel de entrada por trade (R1 Claude Fable 5.1):
         if is_v2:
             dataframe.loc[entry_conditions, "enter_tag"] = np.where(
                 dataframe.loc[entry_conditions, "is_whale_vol"] == 1,
@@ -380,11 +380,11 @@ class RenderQuantV1(IStrategy):
 
         close = dataframe["close"]
 
-        # Saída por reversão concluída à média de Bollinger com RSI recuperado
+        # Sa?da por revers?o conclu?da ? m?dia de Bollinger com RSI recuperado
         take_reversion = (close >= dataframe["bb_middle"]) & (dataframe["rsi"] > self.rsi_exit_mid)
-        # Saída por sobrecompra extrema
+        # Sa?da por sobrecompra extrema
         overbought_exit = dataframe["rsi"] > self.rsi_exit_extreme
-        # Saída estrutural preventiva: perda da SMA50
+        # Sa?da estrutural preventiva: perda da SMA50
         structural_exit = close < dataframe["sma50"]
 
         dataframe.loc[
@@ -408,7 +408,7 @@ class RenderQuantV1(IStrategy):
         """Gatekeeper Institucional (HyperGrok Trading Desk).
 
         1. Daily Loss Circuit Breaker: bloqueia novas compras se a carteira cair mais de 2.5% no dia UTC.
-        2. Trava de Clusters de Correlação: limita no máximo 1 trade ativo por grupo de ativos correlacionados.
+        2. Trava de Clusters de Correla??o: limita no m?ximo 1 trade ativo por grupo de ativos correlacionados.
         """
         today = current_time.astimezone(UTC).date()
         total_balance = 1000.0
@@ -419,7 +419,7 @@ class RenderQuantV1(IStrategy):
                 pass
 
         # 0. Guarda Dura de Saldo Livre (Free Stake Buffer - Claude Fable 5.1)
-        # Rejeita a entrada se o custo da ordem exceder 98% do saldo livre disponível, prevenindo InsufficientFunds
+        # Rejeita a entrada se o custo da ordem exceder 98% do saldo livre dispon?vel, prevenindo InsufficientFunds
         try:
             if self.wallets is not None:
                 free_stake = float(self.wallets.get_available_stake_amount())
@@ -428,7 +428,7 @@ class RenderQuantV1(IStrategy):
                 limit = free_stake * buffer_ratio
                 if order_cost > limit:
                     logger.warning(
-                        "RenderQuant [FREE STAKE VETO]: Custo da ordem ($%.2f) excede limite de segurança ($%.2f / 98%% de $%.2f livre). Entrada em %s rejeitada.",
+                        "RenderQuant [FREE STAKE VETO]: Custo da ordem ($%.2f) excede limite de seguran?a ($%.2f / 98%% de $%.2f livre). Entrada em %s rejeitada.",
                         order_cost,
                         limit,
                         free_stake,
@@ -437,14 +437,14 @@ class RenderQuantV1(IStrategy):
                     self._record_decision(pair, "REJECT", f"Saldo livre insuficiente (Custo ${order_cost:.2f} > Limite ${limit:.2f})")
                     return False
         except Exception as exc:
-            logger.debug("RenderQuant: Falha ao verificar saldo livre disponível: %s", exc)
+            logger.debug("RenderQuant: Falha ao verificar saldo livre dispon?vel: %s", exc)
 
         if self.current_day_utc != today or self.start_of_day_equity is None:
             self.current_day_utc = today
             self.start_of_day_equity = total_balance
             logger.info("RenderQuant: Novo dia UTC iniciado (%s). Equity base: $%.2f", today, total_balance)
 
-        # 0. Filtro de Fricção: Spread Guard Dinâmico (Claude Fable 5.1)
+        # 0. Filtro de Fric??o: Spread Guard Din?mico (Claude Fable 5.1)
         if self.dp is not None:
             try:
                 ticker = self.dp.ticker(pair)
@@ -475,13 +475,13 @@ class RenderQuantV1(IStrategy):
                     btc_c = float(last_btc.get("close", 0.0))
                     btc_e50 = float(last_btc.get("sma50", last_btc.get("ema50", 0.0)))
                     if btc_c > 0 and btc_e50 > 0 and btc_c < btc_e50:
-                        logger.info("RenderQuant [BTC MACRO VETO]: %s bloqueado pois BTC ($%.0f) está abaixo da média de 50 ($%.0f)", pair, btc_c, btc_e50)
-                        self._record_decision(pair, "REJECT", f"Regime Macro: BTC abaixo da média de 50 ($ {btc_c:.0f} < $ {btc_e50:.0f})")
+                        logger.info("RenderQuant [BTC MACRO VETO]: %s bloqueado pois BTC ($%.0f) est? abaixo da m?dia de 50 ($%.0f)", pair, btc_c, btc_e50)
+                        self._record_decision(pair, "REJECT", f"Regime Macro: BTC abaixo da m?dia de 50 ($ {btc_c:.0f} < $ {btc_e50:.0f})")
                         return False
             except Exception as exc:
-                logger.debug("RenderQuant: Falha não crítica na checagem do BTC Macro Guard: %s", exc)
+                logger.debug("RenderQuant: Falha n?o cr?tica na checagem do BTC Macro Guard: %s", exc)
 
-        # 1. Validação do Circuit Breaker Diário (Cálculo robusto sem exceções silenciosas)
+        # 1. Valida??o do Circuit Breaker Di?rio (C?lculo robusto sem exce??es silenciosas)
         try:
             today_start = datetime.combine(today, datetime.min.time(), tzinfo=UTC)
             closed_trades = Trade.get_trades_proxy(is_open=False)
@@ -496,7 +496,7 @@ class RenderQuantV1(IStrategy):
             for t in open_trades:
                 try:
                     if hasattr(t, "calc_profit_abs"):
-                        # Correção P0 SRE: usar a cotação real do próprio trade aberto, jamais o rate do par avaliado!
+                        # Corre??o P0 SRE: usar a cota??o real do pr?prio trade aberto, jamais o rate do par avaliado!
                         t_rate = getattr(t, "current_rate", None) or getattr(t, "open_rate", None)
                         if t_rate is not None and t_rate > 0:
                             unrealized_pnl += float(t.calc_profit_abs(t_rate))
@@ -513,17 +513,17 @@ class RenderQuantV1(IStrategy):
 
             if daily_dd_pct <= -self.daily_loss_stop_pct:
                 logger.warning(
-                    "RenderQuant [CIRCUIT BREAKER]: Perda diária de %.2f%% atingiu limite de -%.2f%%. Entrada em %s bloqueada.",
+                    "RenderQuant [CIRCUIT BREAKER]: Perda di?ria de %.2f%% atingiu limite de -%.2f%%. Entrada em %s bloqueada.",
                     daily_dd_pct * 100,
                     self.daily_loss_stop_pct * 100,
                     pair,
                 )
-                self._record_decision(pair, "REJECT", f"Circuit Breaker ativo (Drawdown diário: {daily_dd_pct*100:.2f}%)")
+                self._record_decision(pair, "REJECT", f"Circuit Breaker ativo (Drawdown di?rio: {daily_dd_pct*100:.2f}%)")
                 return False
         except Exception as exc:
-            logger.debug("RenderQuant: Falha não crítica na checagem do Daily Loss: %s", exc)
+            logger.debug("RenderQuant: Falha n?o cr?tica na checagem do Daily Loss: %s", exc)
 
-        # 2. Validação de Clusters de Correlação
+        # 2. Valida??o de Clusters de Correla??o
         try:
             open_trades = Trade.get_trades_proxy(is_open=True)
             active_pairs = [t.pair for t in open_trades if getattr(t, "is_open", True)]
@@ -533,15 +533,15 @@ class RenderQuantV1(IStrategy):
                     active_in_cluster = sum(1 for p in active_pairs if p in cluster_pairs)
                     if active_in_cluster >= self.MAX_TRADES_PER_CLUSTER:
                         logger.info(
-                            "RenderQuant [CLUSTER VETO]: Cluster %s saturado (%d posições ativas). Entrada em %s vetada.",
+                            "RenderQuant [CLUSTER VETO]: Cluster %s saturado (%d posi??es ativas). Entrada em %s vetada.",
                             cluster_name,
                             active_in_cluster,
                             pair,
                         )
-                        self._record_decision(pair, "REJECT", f"Cluster {cluster_name} saturado ({active_in_cluster} posições ativas)", cluster=cluster_name)
+                        self._record_decision(pair, "REJECT", f"Cluster {cluster_name} saturado ({active_in_cluster} posi??es ativas)", cluster=cluster_name)
                         return False
         except Exception as exc:
-            logger.debug("RenderQuant: Falha não crítica na validação de clusters: %s", exc)
+            logger.debug("RenderQuant: Falha n?o cr?tica na valida??o de clusters: %s", exc)
 
         # 3. Portfolio Heat Gatekeeper (Hard Cap 3.0% de risco total aberto - Claude Fable 5.1 / HyperGrok)
         try:
@@ -585,11 +585,11 @@ class RenderQuantV1(IStrategy):
             self._record_decision(pair, "ENTER", "Filtros de momentum, KER, saldos e risco aprovados", heat=portfolio_heat)
         except Exception as exc:
             logger.error(
-                "RenderQuant [FAIL-CLOSED RISK]: Erro na avaliação de Portfolio Heat: %s. Entrada em %s vetada por segurança.",
+                "RenderQuant [FAIL-CLOSED RISK]: Erro na avalia??o de Portfolio Heat: %s. Entrada em %s vetada por seguran?a.",
                 exc,
                 pair,
             )
-            self._record_decision(pair, "REJECT", f"Falha na avaliação de risco/heat: {exc}")
+            self._record_decision(pair, "REJECT", f"Falha na avalia??o de risco/heat: {exc}")
             return False
 
         # 4. Gatekeeper Cognitivo AI Guardian (Mirai API / Claude Fable 5.1 - Claude Fable 5.1)
@@ -628,13 +628,13 @@ class RenderQuantV1(IStrategy):
                     return False
 
                 logger.info(
-                    "RenderQuant [AI GUARDIAN PASS]: Entrada em %s aprovada pela IA (Convicção: %.0f%% | %s)",
+                    "RenderQuant [AI GUARDIAN PASS]: Entrada em %s aprovada pela IA (Convic??o: %.0f%% | %s)",
                     pair,
                     verdict.get("conviccao", 0.70) * 100,
                     verdict.get("motivo"),
                 )
         except Exception as exc:
-            logger.debug("RenderQuant: Falha não crítica na consulta ao AI Guardian: %s", exc)
+            logger.debug("RenderQuant: Falha n?o cr?tica na consulta ao AI Guardian: %s", exc)
 
         return True
 
@@ -653,15 +653,15 @@ class RenderQuantV1(IStrategy):
     ) -> float:
         """Fase 1 (ml4t/skills): Volatility-Targeted Inverse Position Sizing.
 
-        Stake = risk_budget / stressed_dist_pct, onde a distância de stop é
-        proporcional à volatilidade realizada (ATR) do par, com custos reais
-        de corretora e slippage. Equaliza o risco em dólares de cada aposta.
+        Stake = risk_budget / stressed_dist_pct, onde a dist?ncia de stop ?
+        proporcional ? volatilidade realizada (ATR) do par, com custos reais
+        de corretora e slippage. Equaliza o risco em d?lares de cada aposta.
         Preserva travas institucionais: regime lateral, Quarter-Kelly (N >= 200) e cap de carteira.
         """
         mode = self._get_active_strategy_mode()
         is_v2 = (mode == "RenderQuantV2_Institutional")
 
-        # Parâmetros de risco calibrados conforme o modo ativo
+        # Par?metros de risco calibrados conforme o modo ativo
         active_risk_pct = 0.0075 if is_v2 else self.max_risk_pct_per_trade  # 0.75% vs 1.0%
         active_stake_ratio = 0.08 if is_v2 else self.max_stake_ratio        # 8% vs 10%
         lateral_multiplier = 0.65 if is_v2 else 0.75                       # -35% vs -25% em range
@@ -674,7 +674,7 @@ class RenderQuantV1(IStrategy):
             except Exception:
                 pass
 
-        # 1. Volatilidade realizada (ml4t/skills) -> distância de stop proporcional ao ruído real do ativo
+        # 1. Volatilidade realizada (ml4t/skills) -> dist?ncia de stop proporcional ao ru?do real do ativo
         atr_pct = 0.018  # fallback robusto (1.8%)
         if self.dp is not None:
             try:
@@ -688,17 +688,17 @@ class RenderQuantV1(IStrategy):
 
         vol_stop_pct = float(np.clip(atr_pct * 2.2, 0.020, 0.060))
 
-        # 2. Custos reais: taker na entrada + taker na saída + slippage
+        # 2. Custos reais: taker na entrada + taker na sa?da + slippage
         stressed_dist_pct = vol_stop_pct + (self.taker_fee_pct * 2.0) + (self.slip_floor_bps / 10000.0)
 
-        # 3. Sizing inverso (ml4t): orçamento de risco / distância estressada
+        # 3. Sizing inverso (ml4t): or?amento de risco / dist?ncia estressada
         risk_budget = total_wallet * active_risk_pct
         if stressed_dist_pct > 0:
             calculated_stake = risk_budget / stressed_dist_pct
         else:
             calculated_stake = proposed_stake
 
-        # 4a. Multiplicador por Regime de Mercado (lateral/bear reduz exposição - Maverick)
+        # 4a. Multiplicador por Regime de Mercado (lateral/bear reduz exposi??o - Maverick)
         if self.dp is not None:
             try:
                 dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
@@ -736,13 +736,13 @@ class RenderQuantV1(IStrategy):
         except Exception:
             pass
 
-        # 4c. Cap máximo de carteira (8% V2 / 10% V1)
+        # 4c. Cap m?ximo de carteira (8% V2 / 10% V1)
         cap = min(calculated_stake, total_wallet * active_stake_ratio, float(max_stake))
 
         # 4d. Trava de min_stake da corretora
         if min_stake is not None and cap < float(min_stake):
             logger.warning(
-                "RenderQuant [MIN_STAKE VETO]: Ordem em %s descartada — stake calculado ($%.2f) abaixo do mínimo da corretora ($%.2f).",
+                "RenderQuant [MIN_STAKE VETO]: Ordem em %s descartada ? stake calculado ($%.2f) abaixo do m?nimo da corretora ($%.2f).",
                 pair,
                 cap,
                 float(min_stake),
@@ -767,7 +767,7 @@ class RenderQuantV1(IStrategy):
         after_fill: bool,
         **kwargs: Any,
     ) -> float:
-        """Trailing Stop Escalonado com Breakeven Pós-Taxas (Tríade de Ouro - Claude Fable 5.1)."""
+        """Trailing Stop Escalonado com Breakeven P?s-Taxas (Tr?ade de Ouro - Claude Fable 5.1)."""
         atr_pct = 0.015
         if self.dp is not None:
             dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
@@ -778,15 +778,15 @@ class RenderQuantV1(IStrategy):
 
         dynamic_stop = -float(np.clip(1.8 * atr_pct, 0.020, 0.045))
 
-        # Degrau 1: Lucro atingiu +2.5% -> Breakeven garantido cobrindo taxas (+0.60% líquido)
+        # Degrau 1: Lucro atingiu +2.5% -> Breakeven garantido cobrindo taxas (+0.60% l?quido)
         if current_profit >= 0.025 and current_profit < 0.050:
             return max(dynamic_stop, 0.0060)
 
-        # Degrau 2: Lucro atingiu +5.0% -> Trava lucro líquido de +3.00%
+        # Degrau 2: Lucro atingiu +5.0% -> Trava lucro l?quido de +3.00%
         if current_profit >= 0.050 and current_profit < 0.080:
             return max(dynamic_stop, 0.0300)
 
-        # Degrau 3: Lucro atingiu +8.0% -> Ratchet dinâmico com ATR garantindo pelo menos +5.0% líquido
+        # Degrau 3: Lucro atingiu +8.0% -> Ratchet din?mico com ATR garantindo pelo menos +5.0% l?quido
         if current_profit >= 0.080:
             trailing_dist = max(atr_pct * 1.5, 0.020)
             desired_stop = current_profit - trailing_dist
@@ -794,7 +794,7 @@ class RenderQuantV1(IStrategy):
 
         return dynamic_stop
 
-    # Cache de rate-limit para chamadas de saída da IA (máx 1 consulta a cada 15m por par)
+    # Cache de rate-limit para chamadas de sa?da da IA (m?x 1 consulta a cada 15m por par)
     _last_ai_exit_check: dict[str, float] = {}
 
     def custom_exit(
@@ -807,15 +807,15 @@ class RenderQuantV1(IStrategy):
         **kwargs: Any,
     ) -> Optional[Union[str, bool]]:
         """
-        Saída Cognitiva Inteligente com Claude Fable 5.1 (Mirai API).
-        Avalia encerramento antecipado para embolsar lucros ou cortar estagnação antes de reversão.
-        Possui rate-limit estrito de 15 minutos por par para latência zero e custo controlado.
+        Sa?da Cognitiva Inteligente com Claude Fable 5.1 (Mirai API).
+        Avalia encerramento antecipado para embolsar lucros ou cortar estagna??o antes de revers?o.
+        Possui rate-limit estrito de 15 minutos por par para lat?ncia zero e custo controlado.
         """
         trade_open_date = getattr(trade, "open_date_utc", None)
         open_minutes = 0.0
         if trade_open_date:
             try:
-                # normaliza datetime com timezone se necessário
+                # normaliza datetime com timezone se necess?rio
                 t_diff = (current_time - trade_open_date).total_seconds()
                 open_minutes = max(0.0, t_diff / 60.0)
             except Exception:
@@ -827,13 +827,13 @@ class RenderQuantV1(IStrategy):
         if not (qualifies_profit_shield or qualifies_stagnation_cut):
             return None
 
-        # Rate limit rigoroso: no máximo 1 consulta a cada 900 segundos (15 minutos) por par
+        # Rate limit rigoroso: no m?ximo 1 consulta a cada 900 segundos (15 minutos) por par
         now_ts = time.time()
         last_check = self._last_ai_exit_check.get(pair, 0.0)
         if (now_ts - last_check) < 900.0:
             return None
 
-        # Coleta dados técnicos atuais do par
+        # Coleta dados t?cnicos atuais do par
         ker_val = 0.40
         atr_val = 0.018
         regime_bull_val = True
@@ -860,12 +860,12 @@ class RenderQuantV1(IStrategy):
             if verdict.get("sair", False):
                 reason = verdict.get("motivo", "IA Profit Shield")
                 logger.info(
-                    "RenderQuant [AI GUARDIAN EXIT]: Encerrando %s (Lucro: %+.2f%% | Duração: %.0fm) -> %s",
+                    "RenderQuant [AI GUARDIAN EXIT]: Encerrando %s (Lucro: %+.2f%% | Dura??o: %.0fm) -> %s",
                     pair, current_profit * 100, open_minutes, reason
                 )
                 return f"ia_fable_{reason[:25].strip()}"
         except Exception as exc:
-            logger.debug("RenderQuant: Erro não crítico no custom_exit da IA: %s", exc)
+            logger.debug("RenderQuant: Erro n?o cr?tico no custom_exit da IA: %s", exc)
 
         return None
 
