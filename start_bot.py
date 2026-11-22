@@ -600,15 +600,22 @@ def ensure_runtime_config(
                 # FIX 1: força sempre a estratégia ativa do strategy_state no boot.
                 # Sem isto, uma runtime config sem "strategy" faz o freqtrade cair
                 # no fallback SimpleStrategy (template 5m) — bug observado em produção.
-                try:
-                    st = get_strategy_state()
-                    active = st.get("active_strategy", "")
-                    if active and cfg.get("strategy") != active:
-                        cfg["strategy"] = active
-                        changed = True
-                        print(f"PT-BR_BOOT_STRATEGY_FORCE: {active}", flush=True)
-                except Exception as exc:
-                    print("PT-BR_BOOT_STRATEGY_WARN:", exc, flush=True)
+                # FIX 1b: env var FREQTRADE_STRATEGY tem prioridade absoluta (override P0).
+                env_strategy = os.environ.get("FREQTRADE_STRATEGY", "").strip()
+                if env_strategy and cfg.get("strategy") != env_strategy:
+                    cfg["strategy"] = env_strategy
+                    changed = True
+                    print(f"PT-BR_BOOT_STRATEGY_ENV_OVERRIDE: {env_strategy}", flush=True)
+                elif not cfg.get("strategy"):
+                    try:
+                        st = get_strategy_state()
+                        active = st.get("active_strategy", "RenderQuantV3_Defensive")
+                        if active:
+                            cfg["strategy"] = active
+                            changed = True
+                            print(f"PT-BR_BOOT_STRATEGY_FORCE: {active}", flush=True)
+                    except Exception as exc:
+                        print("PT-BR_BOOT_STRATEGY_WARN:", exc, flush=True)
                 # FIX 2: chaves da corretora via env vars (persistentes na Render,
                 # sobrevivem a sleep/redeploy). Env tem prioridade sobre /tmp.
                 env_key = os.environ.get("EXCHANGE_KEY", "").strip()
@@ -628,6 +635,15 @@ def ensure_runtime_config(
                 if not bool(cfg.get("dry_run", True)) and (not ex.get("key") or not ex.get("secret")):
                     cfg["dry_run"] = True
                     changed = True
+                # FIX 2b: db_url do DATABASE_URL direto na runtime config (override P0).
+                # Garante Postgres persistente mesmo se o parsing de --db-url falhar.
+                env_db = os.environ.get("DATABASE_URL", "").strip()
+                if env_db.startswith("postgres://"):
+                    env_db = env_db.replace("postgres://", "postgresql://", 1)
+                if env_db and cfg.get("db_url") != env_db:
+                    cfg["db_url"] = env_db
+                    changed = True
+                    print("PT-BR_BOOT_DB_URL_ENV_OVERRIDE: postgres configurado", flush=True)
                 if cfg.get("fiat_display_currency", "") != "":
                     cfg["fiat_display_currency"] = ""
                     changed = True
