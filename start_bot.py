@@ -2094,6 +2094,18 @@ def main() -> None:
         "--config",
         str(ensure_runtime_config()),
     ]
+    # FIX 6 (à prova de balas): re-lê e hard-set direto na runtime config com marcador
+    # único de bot_name. Se show_config reportar este nome, a config foi escrita por
+    # ESTE código; se reportar outro, existe outro escritor/instância (diagnóstico).
+    try:
+        _force = json.loads(RUNTIME_CONFIG_PATH.read_text(encoding="utf-8"))
+        _force["strategy"] = boot_strategy
+        _force["user_data_dir"] = "/freqtrade/user_data"
+        _force["bot_name"] = "Unkiorra RenderQuantV3"
+        _atomic_write_text(RUNTIME_CONFIG_PATH, json.dumps(_force, indent=2, ensure_ascii=False) + "\n")
+        print("PT-BR_BOOT_FORCE_FINAL:", _force.get("strategy"), "|", _force.get("bot_name"), "|", _force.get("exchange", {}).get("pair_whitelist"), flush=True)
+    except Exception as exc:
+        print("PT-BR_BOOT_FORCE_FINAL_WARN:", exc, flush=True)
     # FIX 4 (auditoria): dump do estado final antes de entregar ao freqtrade.
     # Se a estratégia divergir daqui para frente, a causa é pós-argv (reload interno).
     try:
