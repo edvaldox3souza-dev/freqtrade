@@ -836,7 +836,7 @@ AVAILABLE_STRATEGIES = [
 def get_strategy_state() -> dict:
     from user_data.state_store import load_state
     default = {
-        "active_strategy": os.environ.get("FREQTRADE_STRATEGY", "RenderQuantV1"),
+        "active_strategy": os.environ.get("FREQTRADE_STRATEGY", "RenderQuantV3_Defensive"),
         "updated_at": time.strftime("%H:%M:%S UTC"),
     }
     data = load_state("strategy_state", [STRATEGY_STATE_PATH], default)
