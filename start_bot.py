@@ -2001,6 +2001,35 @@ def install_sqlalchemy_neon_pool_hooks() -> None:
         print("SQLAlchemy pool hook warning:", exc, flush=True)
 
 
+def install_telegram_conflict_resilience_hook() -> None:
+    """Evita que o Telegram pare o polling se houver conflito passageiro durante o deploy rolling do Render."""
+    try:
+        from telegram.error import Conflict
+        from telegram.ext import ExtBot
+
+        orig_get_updates = ExtBot.get_updates
+
+        async def resilient_get_updates(self, *args, **kwargs):
+            for attempt in range(12):
+                try:
+                    return await orig_get_updates(self, *args, **kwargs)
+                except Conflict as exc:
+                    if attempt < 11:
+                        print(
+                            f"[telegram] Conflito temporario de deploy ({exc}) - "
+                            f"aguardando finalizacao do container anterior ({attempt + 1}/11)...",
+                            flush=True,
+                        )
+                        await asyncio.sleep(6)
+                    else:
+                        raise
+
+        ExtBot.get_updates = resilient_get_updates
+        print("Telegram Conflict resilience hook installed (12 retries x 6s)!", flush=True)
+    except Exception as exc:
+        print("Telegram resilience hook warning:", exc, flush=True)
+
+
 def start_ram_watchdog(interval: int = 60, soft_limit_mb: int = 420) -> None:
     """Watchdog de memória para Render Free (512MB) - dispara gc.collect() se RAM > 420MB."""
     def _watchdog_loop():
@@ -2070,6 +2099,7 @@ def main() -> None:
     install_pt_br_hooks()
     install_web_pt_br_hooks()
     install_sqlalchemy_neon_pool_hooks()
+    install_telegram_conflict_resilience_hook()
     print("Telegram & Web PT-BR translation hooks installed!", flush=True)
     from freqtrade.main import main as ft_main
 
