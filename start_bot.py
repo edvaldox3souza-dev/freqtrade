@@ -863,10 +863,10 @@ def format_corretora_text() -> str:
 
 STRATEGY_STATE_PATH = pathlib.Path("/freqtrade/user_data/strategy_state.json")
 AVAILABLE_STRATEGIES = [
-    ("RenderQuantV1", "🛡️ RenderQuant V1 (Equilibrada)"),
-    ("RenderQuantV2_Institutional", "🏛️ RenderQuant V2 (Institucional)"),
-    ("RenderQuantV3_Defensive", "🧲 RenderQuant V3 (Defensiva 4h — validada em backtest 600d)"),
-
+    ("RenderQuantV1", "🛡️ RenderQuant V1 (Equilibrada 15m)"),
+    ("RenderQuantV2_Institutional", "🏛️ RenderQuant V2 (Institucional 15m)"),
+    ("RenderQuantV3_Defensive", "🧲 RenderQuant V3 (Defensiva 4h — validada 600d)"),
+    ("RenderQuantV4_Adaptive", "🚀 RenderQuant V4 (Adaptativa Multi-Regime 4h + Breakeven)"),
 ]
 
 
