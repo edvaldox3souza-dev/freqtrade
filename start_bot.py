@@ -1193,9 +1193,6 @@ def install_web_pt_br_hooks() -> None:
         import base64 as _b64
         import secrets as _secrets
         from fastapi import HTTPException, Request
-        from freqtrade.rpc.api_server.webserver import ApiServer
-
-        orig_api_init = ApiServer.__init__
 
         def _check_basic(req: Request) -> None:
             auth = req.headers.get("Authorization", "")
@@ -1223,76 +1220,99 @@ def install_web_pt_br_hooks() -> None:
             if not _secrets.compare_digest(auth, expected):
                 raise HTTPException(status_code=401, detail="Unauthorized")
 
-        def patched_api_init(self, *args, **kwargs):
-            orig_api_init(self, *args, **kwargs)
-            app = getattr(self, "app", None)
-            if app is None:
-                return
+        def _reload_freqtrade_rpc():
+            try:
+                from freqtrade.rpc.api_server.deps import get_rpc_optional
+                rpc = get_rpc_optional()
+                if rpc is not None:
+                    rpc._rpc_reload_config()
+                    print("PT-BR_RPC_RELOAD_SUCCESS", flush=True)
+            except Exception as exc:
+                print("PT-BR_RPC_RELOAD_WARN:", exc, flush=True)
 
-            @app.get("/api/v1/unkiorra/exchange")
-            async def unkiorra_get_ex(request: Request):
-                _check_basic(request)
-                return get_exchange_status()
+        async def _unkiorra_get_strat_handler(request: Request):
+            _check_basic(request)
+            st = get_strategy_state()
+            return {
+                "active_strategy": st.get("active_strategy", "RenderQuantV3_Defensive"),
+                "updated_at": st.get("updated_at", ""),
+                "available_strategies": [
+                    {"name": k, "label": v} for k, v in AVAILABLE_STRATEGIES
+                ],
+            }
 
-            @app.post("/api/v1/unkiorra/exchange")
-            async def unkiorra_set_ex(request: Request):
-                _check_basic(request)
-                body = await request.json()
-                ex_req = (body.get("exchange") or body.get("exchange_name") or "").strip().lower()
-                ok, err = await precheck_exchange_async(ex_req)
-                if not ok:
-                    raise HTTPException(status_code=400, detail=err)
-                res = update_exchange_config(
-                    exchange_name=body.get("exchange") or body.get("exchange_name"),
-                    api_key=body.get("key") or body.get("api_key"),
-                    api_secret=body.get("secret") or body.get("api_secret"),
-                    passphrase=body.get("password") or body.get("passphrase"),
-                    dry_run=body.get("dry_run"),
-                )
-                try:
-                    if hasattr(self, "_rpc") and self._rpc is not None:
-                        self._rpc._rpc_reload_config()
-                except Exception as exc:
-                    print("PT-BR_EX_RELOAD_WARN:", exc, flush=True)
-                return res
+        async def _unkiorra_set_strat_handler(request: Request):
+            _check_basic(request)
+            body = await request.json()
+            strat_name = (body.get("strategy") or body.get("strategy_name") or "").strip()
+            valid_names = {k for k, _ in AVAILABLE_STRATEGIES}
+            if strat_name not in valid_names:
+                raise HTTPException(status_code=400, detail=f"Estratégia inválida. Escolha entre: {', '.join(valid_names)}")
+            st = update_strategy_state(strat_name)
+            _reload_freqtrade_rpc()
+            return {
+                "status": "success",
+                "active_strategy": st.get("active_strategy"),
+                "updated_at": st.get("updated_at"),
+                "message": f"Estratégia alterada com sucesso para {strat_name}!",
+            }
 
-            @app.get("/api/v1/unkiorra/strategy")
-            async def unkiorra_get_strat(request: Request):
-                _check_basic(request)
-                st = get_strategy_state()
-                return {
-                    "active_strategy": st.get("active_strategy", "RenderQuantV3_Defensive"),
-                    "updated_at": st.get("updated_at", ""),
-                    "available_strategies": [
-                        {"name": k, "label": v} for k, v in AVAILABLE_STRATEGIES
-                    ],
-                }
+        async def _unkiorra_get_ex_handler(request: Request):
+            _check_basic(request)
+            return get_exchange_status()
 
-            @app.post("/api/v1/unkiorra/strategy")
-            async def unkiorra_set_strat(request: Request):
-                _check_basic(request)
-                body = await request.json()
-                strat_name = (body.get("strategy") or body.get("strategy_name") or "").strip()
-                valid_names = {k for k, _ in AVAILABLE_STRATEGIES}
-                if strat_name not in valid_names:
-                    raise HTTPException(status_code=400, detail=f"Estratégia inválida. Escolha entre: {', '.join(valid_names)}")
-                st = update_strategy_state(strat_name)
-                try:
-                    if hasattr(self, "_rpc") and self._rpc is not None:
-                        self._rpc._rpc_reload_config()
-                except Exception as exc:
-                    print("PT-BR_STRAT_RELOAD_WARN:", exc, flush=True)
-                return {
-                    "status": "success",
-                    "active_strategy": st.get("active_strategy"),
-                    "updated_at": st.get("updated_at"),
-                    "message": f"Estratégia alterada com sucesso para {strat_name}!",
-                }
+        async def _unkiorra_set_ex_handler(request: Request):
+            _check_basic(request)
+            body = await request.json()
+            ex_req = (body.get("exchange") or body.get("exchange_name") or "").strip().lower()
+            ok, err = await precheck_exchange_async(ex_req)
+            if not ok:
+                raise HTTPException(status_code=400, detail=err)
+            res = update_exchange_config(
+                exchange_name=body.get("exchange") or body.get("exchange_name"),
+                api_key=body.get("key") or body.get("api_key"),
+                api_secret=body.get("secret") or body.get("api_secret"),
+                passphrase=body.get("password") or body.get("passphrase"),
+                dry_run=body.get("dry_run"),
+            )
+            _reload_freqtrade_rpc()
+            return res
 
-            print("PT-BR_ROUTES_REGISTERED_ON_API_SERVER_APP", flush=True)
+        # 1. Registro direto no APIRouter do api_v1 oficial do Freqtrade
+        try:
+            from freqtrade.rpc.api_server import api_v1
+            for path in ["/unkiorra/strategy", "/api/v1/unkiorra/strategy"]:
+                api_v1.router.add_api_route(path, _unkiorra_get_strat_handler, methods=["GET"])
+                api_v1.router.add_api_route(path, _unkiorra_set_strat_handler, methods=["POST"])
+            for path in ["/unkiorra/exchange", "/api/v1/unkiorra/exchange"]:
+                api_v1.router.add_api_route(path, _unkiorra_get_ex_handler, methods=["GET"])
+                api_v1.router.add_api_route(path, _unkiorra_set_ex_handler, methods=["POST"])
+            print("PT-BR_ROUTES_REGISTERED_ON_API_V1_ROUTER", flush=True)
+        except Exception as exc:
+            print("PT-BR_API_V1_ROUTER_WARN:", exc, flush=True)
 
-        ApiServer.__init__ = patched_api_init
-        print("PT-BR_EXCHANGE_API_HOOK_INSTALLED", flush=True)
+        # 2. Registro no ApiServer.__init__ para self.app
+        try:
+            from freqtrade.rpc.api_server.webserver import ApiServer
+            orig_api_init = ApiServer.__init__
+
+            def patched_api_init(self, *args, **kwargs):
+                orig_api_init(self, *args, **kwargs)
+                app = getattr(self, "app", None)
+                if app is not None:
+                    for path in ["/api/v1/unkiorra/strategy", "/unkiorra/strategy"]:
+                        app.add_api_route(path, _unkiorra_get_strat_handler, methods=["GET"])
+                        app.add_api_route(path, _unkiorra_set_strat_handler, methods=["POST"])
+                    for path in ["/api/v1/unkiorra/exchange", "/unkiorra/exchange"]:
+                        app.add_api_route(path, _unkiorra_get_ex_handler, methods=["GET"])
+                        app.add_api_route(path, _unkiorra_set_ex_handler, methods=["POST"])
+                    print("PT-BR_ROUTES_REGISTERED_ON_API_SERVER_APP", flush=True)
+
+            ApiServer.__init__ = patched_api_init
+        except Exception as exc:
+            print("PT-BR_API_SERVER_INIT_WARN:", exc, flush=True)
+
+        print("PT-BR_EXCHANGE_AND_STRATEGY_HOOKS_INSTALLED", flush=True)
     except Exception as exc:
         print("PT-BR_EXCHANGE_API_ERR:", exc, flush=True)
 
