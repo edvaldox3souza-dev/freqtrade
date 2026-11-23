@@ -1195,7 +1195,7 @@ def install_web_pt_br_hooks() -> None:
         from fastapi import HTTPException, Request
         from freqtrade.rpc.api_server.webserver import ApiServer
 
-        orig_cfg_app = ApiServer.configure_app
+        orig_api_init = ApiServer.__init__
 
         def _check_basic(req: Request) -> None:
             auth = req.headers.get("Authorization", "")
@@ -1203,8 +1203,16 @@ def install_web_pt_br_hooks() -> None:
                 try:
                     import jwt as _jwt
                     secret = os.environ.get("FREQTRADE__API_SERVER__JWT_SECRET_KEY", "")
+                    if not secret and RUNTIME_CONFIG_PATH.exists():
+                        try:
+                            secret = json.loads(RUNTIME_CONFIG_PATH.read_text(encoding="utf-8")).get("api_server", {}).get("jwt_secret_key", "")
+                        except Exception:
+                            pass
                     if not secret and SECRET_CONFIG_PATH.exists():
-                        secret = json.loads(SECRET_CONFIG_PATH.read_text(encoding="utf-8")).get("api_server", {}).get("jwt_secret_key", "")
+                        try:
+                            secret = json.loads(SECRET_CONFIG_PATH.read_text(encoding="utf-8")).get("api_server", {}).get("jwt_secret_key", "")
+                        except Exception:
+                            pass
                     if secret:
                         _jwt.decode(auth[7:].strip(), secret, algorithms=["HS256"])
                         return
@@ -1215,11 +1223,11 @@ def install_web_pt_br_hooks() -> None:
             if not _secrets.compare_digest(auth, expected):
                 raise HTTPException(status_code=401, detail="Unauthorized")
 
-        def patched_cfg_app(self, *args, **kwargs):
-            res = orig_cfg_app(self, *args, **kwargs)
-            app = args[0] if args else getattr(self, "app", None)
+        def patched_api_init(self, *args, **kwargs):
+            orig_api_init(self, *args, **kwargs)
+            app = getattr(self, "app", None)
             if app is None:
-                return res
+                return
 
             @app.get("/api/v1/unkiorra/exchange")
             async def unkiorra_get_ex(request: Request):
@@ -1280,9 +1288,10 @@ def install_web_pt_br_hooks() -> None:
                     "updated_at": st.get("updated_at"),
                     "message": f"Estratégia alterada com sucesso para {strat_name}!",
                 }
-            return res
 
-        ApiServer.configure_app = patched_cfg_app
+            print("PT-BR_ROUTES_REGISTERED_ON_API_SERVER_APP", flush=True)
+
+        ApiServer.__init__ = patched_api_init
         print("PT-BR_EXCHANGE_API_HOOK_INSTALLED", flush=True)
     except Exception as exc:
         print("PT-BR_EXCHANGE_API_ERR:", exc, flush=True)
