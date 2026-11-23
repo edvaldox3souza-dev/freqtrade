@@ -1060,16 +1060,58 @@ def build_web_pt_br_script() -> str:
         "  if(!document.body||document.getElementById('unk-cockpit-hud'))return;"
         "  const h=document.createElement('div');h.id='unk-cockpit-hud';"
         "  h.style.cssText='position:fixed;top:0;left:0;right:0;height:36px;z-index:99998;background:linear-gradient(90deg,#0a0f1d,#0f172a);border-bottom:1px solid #14b8a6;display:flex;align-items:center;justify-content:space-between;padding:0 16px;font-family:sans-serif;font-size:12px;color:#f8fafc;box-shadow:0 2px 10px rgba(0,0,0,0.5);';"
-        "  h.innerHTML='<div style=\"display:flex;align-items:center;gap:16px;\"><span style=\"color:#2dd4bf;font-weight:bold;\">⚡ UNKIORRA QUANT COCKPIT</span><span>Modo: <strong style=\"color:#38bdf8;\">RenderQuantV1</strong></span><span>Risco Máx: <strong style=\"color:#4ade80;\">Heat &le; 3.0%</strong></span><span>Circuit Breaker: <strong style=\"color:#4ade80;\">🟢 ARMADO</strong></span></div><div style=\"display:flex;align-items:center;gap:12px;\"><span style=\"background:#0f766e;color:#fff;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;\">LIVE SAFEGUARD</span></div>';"
+        "  h.innerHTML='<div style=\"display:flex;align-items:center;gap:16px;\"><span style=\"color:#2dd4bf;font-weight:bold;\">⚡ UNKIORRA QUANT COCKPIT</span><span>Modo: <strong id=\"unk-hud-strat-label\" style=\"color:#38bdf8;\">RenderQuantV3_Defensive</strong></span><span>Risco: <strong style=\"color:#4ade80;\">Heat &le; 3.0%</strong></span><span>Circuit Breaker: <strong style=\"color:#4ade80;\">🟢 ARMADO</strong></span></div><div style=\"display:flex;align-items:center;gap:12px;\"><button id=\"unk-hud-strat-btn\" style=\"background:#2563eb;color:#fff;border:none;padding:3px 10px;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;\">🎯 Mudar Estratégia</button><span style=\"background:#0f766e;color:#fff;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;\">LIVE SAFEGUARD</span></div>';"
         "  document.body.prepend(h);"
         "  document.body.style.paddingTop='36px';"
+        "  const b=document.getElementById('unk-hud-strat-btn');if(b)b.onclick=()=>{if(window.openStratModal)window.openStratModal();};"
+        "}"
+        "function mountStratModal(){"
+        "  if(!document.body||document.getElementById('unk-strat-btn'))return;"
+        "  const btn=document.createElement('button');btn.id='unk-strat-btn';"
+        "  btn.textContent='🎯 Estratégia';"
+        "  btn.style.cssText='position:fixed;bottom:16px;right:180px;z-index:9999;background:#2563eb;color:#fff;border:none;border-radius:999px;padding:10px 16px;font-weight:600;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.3);';"
+        "  document.body.appendChild(btn);"
+        "  const ov=document.createElement('div');ov.id='unk-strat-ov';"
+        "  ov.style.cssText='display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.6);align-items:center;justify-content:center;';"
+        "  ov.innerHTML='<div style=\"background:#1e293b;color:#f8fafc;padding:22px;border-radius:12px;width:420px;max-width:92vw;font-family:sans-serif;\"><h3 style=\"margin:0 0 10px;display:flex;align-items:center;gap:8px;\">🎯 Alternar Estratégia do Robô</h3><p style=\"font-size:12px;color:#94a3b8;margin:0 0 14px;\">Selecione a estratégia quantitativa em tempo real. A comutação atualiza o motor imediatamente sem derrubar o container.</p><label style=\"display:block;font-size:12px;margin-bottom:6px;\">Estratégias Disponíveis:</label><select id=\"unk-strat-select\" style=\"width:100%;padding:10px;border-radius:6px;border:1px solid #475569;background:#0f172a;color:#fff;font-size:13px;\"><option value=\"RenderQuantV3_Defensive\">🧲 RenderQuant V3 (Defensiva 4h — Validada 600d)</option><option value=\"RenderQuantV4_Adaptive\">🚀 RenderQuant V4 (Adaptativa Multi-Regime 4h + Breakeven)</option><option value=\"RenderQuantV1\">🛡️ RenderQuant V1 (Equilibrada 15m)</option><option value=\"RenderQuantV2_Institutional\">🏛️ RenderQuant V2 (Institucional 15m)</option></select><div id=\"unk-strat-msg\" style=\"font-size:12px;margin-top:10px;color:#38bdf8;\"></div><div style=\"display:flex;gap:8px;justify-content:flex-end;margin-top:16px;\"><button id=\"unk-strat-close\" style=\"padding:8px 12px;border-radius:6px;border:1px solid #475569;background:transparent;color:#fff;cursor:pointer;\">Fechar</button><button id=\"unk-strat-save\" style=\"padding:8px 16px;border-radius:6px;border:none;background:#2563eb;color:#fff;font-weight:600;cursor:pointer;\">Salvar e Aplicar</button></div></div>';"
+        "  document.body.appendChild(ov);"
+        "  window.openStratModal=async()=>{"
+        "    ov.style.display='flex';"
+        "    const m=document.getElementById('unk-strat-msg');m.textContent='Carregando estado...';"
+        "    const auth=getSessionAuth();if(!auth){m.textContent='Autenticação necessária.';return;}"
+        "    try{"
+        "      const r=await fetch('/api/v1/unkiorra/strategy',{headers:{Authorization:auth}});"
+        "      if(r.ok){"
+        "        const d=await r.json();"
+        "        if(d.active_strategy)document.getElementById('unk-strat-select').value=d.active_strategy;"
+        "        m.textContent='Estratégia ativa: '+d.active_strategy;"
+        "        const hl=document.getElementById('unk-hud-strat-label');if(hl)hl.textContent=d.active_strategy;"
+        "      }else{m.textContent='Falha ao carregar estado da estratégia.';}"
+        "    }catch(e){m.textContent='Erro de conexão.';}"
+        "  };"
+        "  btn.onclick=()=>window.openStratModal();"
+        "  document.getElementById('unk-strat-close').onclick=()=>{ov.style.display='none';};"
+        "  document.getElementById('unk-strat-save').onclick=async()=>{"
+        "    const m=document.getElementById('unk-strat-msg');m.textContent='Aplicando nova estratégia...';"
+        "    const auth=getSessionAuth();if(!auth){m.textContent='Autenticação necessária.';return;}"
+        "    const sel=document.getElementById('unk-strat-select').value;"
+        "    try{"
+        "      const r=await fetch('/api/v1/unkiorra/strategy',{method:'POST',headers:{'Content-Type':'application/json',Authorization:auth},body:JSON.stringify({strategy:sel})});"
+        "      const d=await r.json();"
+        "      if(r.ok){"
+        "        m.textContent='✅ Sucesso! Recarregando aplicação...';"
+        "        const hl=document.getElementById('unk-hud-strat-label');if(hl)hl.textContent=sel;"
+        "        setTimeout(()=>{ov.style.display='none';location.reload();},1200);"
+        "      }else{m.textContent='❌ Erro: '+(d.detail||'falha ao aplicar');}"
+        "    }catch(e){m.textContent='Erro de rede ao salvar estratégia.';}"
+        "  };"
         "}"
         "function mountExModal(){""  if(!document.body||document.getElementById('unk-ex-btn'))return;""  const btn=document.createElement('button');btn.id='unk-ex-btn';""  btn.textContent='🏦 Corretora & API';""  btn.style.cssText='position:fixed;bottom:16px;right:16px;z-index:9999;background:#0f766e;color:#fff;border:none;border-radius:999px;padding:10px 16px;font-weight:600;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.3);';""  document.body.appendChild(btn);""  const ov=document.createElement('div');ov.id='unk-ex-ov';""  ov.style.cssText='display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.6);align-items:center;justify-content:center;';""  ov.innerHTML='<div style=\"background:#1e293b;color:#f8fafc;padding:20px;border-radius:12px;width:360px;max-width:92vw;font-family:sans-serif;\"><h3 style=\"margin:0 0 12px\">🏦 Corretora & Chaves API</h3><label style=\"display:block;font-size:12px;margin-top:8px\">Corretora (ex: kraken, binance, bybit, okx)</label><input id=\"unk-ex-name\" style=\"width:100%;padding:8px;margin-top:4px;border-radius:6px;border:1px solid #475569;background:#0f172a;color:#fff;\"/><label style=\"display:block;font-size:12px;margin-top:8px\">API Key</label><input id=\"unk-ex-key\" type=\"password\" placeholder=\"Deixe vazio para manter atual\" style=\"width:100%;padding:8px;margin-top:4px;border-radius:6px;border:1px solid #475569;background:#0f172a;color:#fff;\"/><label style=\"display:block;font-size:12px;margin-top:8px\">API Secret</label><input id=\"unk-ex-sec\" type=\"password\" placeholder=\"Deixe vazio para manter atual\" style=\"width:100%;padding:8px;margin-top:4px;border-radius:6px;border:1px solid #475569;background:#0f172a;color:#fff;\"/><label style=\"display:block;font-size:12px;margin-top:8px\">Passphrase (opcional: OKX/KuCoin)</label><input id=\"unk-ex-pass\" type=\"password\" style=\"width:100%;padding:8px;margin-top:4px;border-radius:6px;border:1px solid #475569;background:#0f172a;color:#fff;\"/><label style=\"display:flex;align-items:center;gap:8px;margin-top:10px;font-size:13px\"><input id=\"unk-ex-dry\" type=\"checkbox\"/> Modo Simulado (Dry-Run)</label><div id=\"unk-ex-msg\" style=\"font-size:12px;margin-top:8px;color:#94a3b8\"></div><div style=\"display:flex;gap:8px;justify-content:flex-end;margin-top:14px\"><button id=\"unk-ex-close\" style=\"padding:8px 12px;border-radius:6px;border:1px solid #475569;background:transparent;color:#fff;cursor:pointer\">Fechar</button><button id=\"unk-ex-save\" style=\"padding:8px 14px;border-radius:6px;border:none;background:#0f766e;color:#fff;font-weight:600;cursor:pointer\">Salvar e Aplicar</button></div></div>';""  document.body.appendChild(ov);""  function getSessionAuth(){try{const raw=localStorage.getItem('ftAuthLoginInfo');if(raw){const p=JSON.parse(raw);const b=p&&typeof p==='object'?Object.values(p)[0]:null;if(b&&b.accessToken)return 'Bearer '+b.accessToken;}}catch(e){}if(!window.__unkAuth){const u=prompt('Usuário da API Freqtrade:');const p=prompt('Senha da API Freqtrade:');if(u&&p)window.__unkAuth='Basic '+btoa(u+':'+p);}return window.__unkAuth||'';}""  btn.onclick=async()=>{ov.style.display='flex';const m=document.getElementById('unk-ex-msg');m.textContent='Carregando...';const auth=getSessionAuth();if(!auth){m.textContent='Autenticação necessária.';return;}try{const r=await fetch('/api/v1/unkiorra/exchange',{headers:{Authorization:auth}});if(r.status===401){window.__unkAuth='';m.textContent='Sessão expirada. Clique novamente.';return;}const d=await r.json();document.getElementById('unk-ex-name').value=d.exchange||'kraken';document.getElementById('unk-ex-dry').checked=!!d.dry_run;m.textContent='Chave atual: '+(d.key_masked||'Não configurada');}catch(e){m.textContent='Erro ao carregar.';}};""  document.getElementById('unk-ex-close').onclick=()=>{ov.style.display='none';};""  document.getElementById('unk-ex-save').onclick=async()=>{const m=document.getElementById('unk-ex-msg');const auth=getSessionAuth();if(!auth){m.textContent='Autenticação necessária.';return;}m.textContent='Salvando...';const body={exchange:document.getElementById('unk-ex-name').value,dry_run:document.getElementById('unk-ex-dry').checked};const k=document.getElementById('unk-ex-key').value,sc=document.getElementById('unk-ex-sec').value,ps=document.getElementById('unk-ex-pass').value;if(k)body.key=k;if(sc)body.secret=sc;if(ps)body.password=ps;try{const r=await fetch('/api/v1/unkiorra/exchange',{method:'POST',headers:{'Content-Type':'application/json',Authorization:auth},body:JSON.stringify(body)});const d=await r.json();m.textContent=r.ok?('Salvo: '+d.exchange+' ('+d.key_masked+'). Recarregando...'):('Erro: '+(d.detail||'falha'));}catch(e){m.textContent='Erro de rede.';}};""}"
         "function runWalk(){"
         "  if(!document.body)return;"
         "  obs.disconnect();"
         "  prefillLogin();"
-        "  walk(document.body);mountCockpitHUD();mountExModal();"
+        "  walk(document.body);mountCockpitHUD();mountStratModal();mountExModal();"
         "  obs.observe(document.body,{childList:true,subtree:true});"
         "}"
         "const obs=new MutationObserver(()=>{"
@@ -1205,6 +1247,39 @@ def install_web_pt_br_hooks() -> None:
                 except Exception as exc:
                     print("PT-BR_EX_RELOAD_WARN:", exc, flush=True)
                 return res
+
+            @app.get("/api/v1/unkiorra/strategy")
+            async def unkiorra_get_strat(request: Request):
+                _check_basic(request)
+                st = get_strategy_state()
+                return {
+                    "active_strategy": st.get("active_strategy", "RenderQuantV3_Defensive"),
+                    "updated_at": st.get("updated_at", ""),
+                    "available_strategies": [
+                        {"name": k, "label": v} for k, v in AVAILABLE_STRATEGIES
+                    ],
+                }
+
+            @app.post("/api/v1/unkiorra/strategy")
+            async def unkiorra_set_strat(request: Request):
+                _check_basic(request)
+                body = await request.json()
+                strat_name = (body.get("strategy") or body.get("strategy_name") or "").strip()
+                valid_names = {k for k, _ in AVAILABLE_STRATEGIES}
+                if strat_name not in valid_names:
+                    raise HTTPException(status_code=400, detail=f"Estratégia inválida. Escolha entre: {', '.join(valid_names)}")
+                st = update_strategy_state(strat_name)
+                try:
+                    if hasattr(self, "_rpc") and self._rpc is not None:
+                        self._rpc._rpc_reload_config()
+                except Exception as exc:
+                    print("PT-BR_STRAT_RELOAD_WARN:", exc, flush=True)
+                return {
+                    "status": "success",
+                    "active_strategy": st.get("active_strategy"),
+                    "updated_at": st.get("updated_at"),
+                    "message": f"Estratégia alterada com sucesso para {strat_name}!",
+                }
             return res
 
         ApiServer.configure_app = patched_cfg_app
