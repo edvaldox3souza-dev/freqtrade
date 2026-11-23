@@ -848,7 +848,7 @@ def build_corretora_inline_rows() -> list[list[tuple[str, str]]]:
         [("🟢 KuCoin", "unk_ex:kucoin"), ("🟡 Binance", "unk_ex:binance")],
         [("🔑 API Key", "unk_input:api_key"), ("🔐 API Secret", "unk_input:api_secret"), ("🗝️ Passphrase", "unk_input:passphrase")],
         [("🛡️ Modo Simulado", "unk_mode:dry"), ("🚀 Conta Real", "unk_mode:live")],
-        [("🧠 Guardião IA (Claude Fable)", "unk_ai:open")],
+        [("🧠 Guardião IA (Claude Opus 5.5)", "unk_ai:open")],
         [("🗑️ Limpar Chaves", "unk_api:clear"), ("🔄 Atualizar", "unk_ex:refresh"), ("🏠 Menu", "unk_nav:menu")],
     ]
 
@@ -869,9 +869,10 @@ def format_corretora_text() -> str:
     try:
         from user_data.ai_guardian import get_state as _ai_st
         s_ai = _ai_st()
-        ai_status = "🟢 ATIVADA (Claude Fable 5.1)" if s_ai.get("enabled", False) else "🔴 PAUSADA"
+        m_name = s_ai.get("model", "claude-opus-5.5")
+        ai_status = f"🟢 ATIVADA ({m_name})" if s_ai.get("enabled", False) else "🔴 PAUSADA"
     except Exception:
-        ai_status = "🟢 ATIVADA (Claude Fable 5.1)"
+        ai_status = "🟢 ATIVADA (Claude Opus 5.5)"
     return (
         f"🏦 *Configuração da Corretora & API*\n\n"
         f"• *Corretora atual:* `{st['exchange'].upper()}`\n"
@@ -978,8 +979,8 @@ def format_ai_guardian_text() -> str:
         try:
             return mod.format_ai_guardian_text()
         except Exception as exc:
-            return f"🧠 *Guardião IA (Claude Fable 5.1)*\n\n⚠️ Erro ao formatar: `{exc}`"
-    return "🧠 *Guardião IA (Claude Fable 5.1)*\n\n• *Status:* 🟢 *ATIVO (Veto Cognitivo Ligado)*\n• *Motor Cognitivo:* `claude-fable-5.1` (Mirai API)\n• *Convicção Mínima:* `65%`\n• *Saída Inteligente (Profit Shield):* `🟢 Ativa`"
+            return f"🧠 *Guardião IA (Claude Opus 5.5)*\n\n⚠️ Erro ao formatar: `{exc}`"
+    return "🧠 *Guardião IA (Claude Opus 5.5)*\n\n• *Status:* 🟢 *ATIVO (Veto Cognitivo Ligado)*\n• *Motor Cognitivo:* `claude-opus-5.5` (Mirai API)\n• *Convicção Mínima:* `65%`\n• *Saída Inteligente (Profit Shield):* `🟢 Ativa`"
 
 
 def build_ai_guardian_inline_markup():

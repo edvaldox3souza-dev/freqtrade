@@ -27,7 +27,7 @@ DEFAULT_STATE = {
     "enabled": True,
     "api_key": os.environ.get("AI_GUARDIAN_API_KEY", "").strip(),
     "endpoint": "https://api.miraiapi.com/v1/chat/completions",
-    "model": "claude-fable-5.1",
+    "model": os.environ.get("AI_GUARDIAN_MODEL", "claude-opus-5.5").strip() or "claude-opus-5.5",
     "min_conviccao": 0.65,
     "last_verdict": None,
     "total_queries": 0,
@@ -52,7 +52,16 @@ def _get_target_path() -> pathlib.Path:
 
 def get_state() -> dict:
     with _STATE_LOCK:
-        return load_state(STATE_DB_KEY, STATE_PATHS, DEFAULT_STATE)
+        st = load_state(STATE_DB_KEY, STATE_PATHS, DEFAULT_STATE)
+        env_key = os.environ.get("AI_GUARDIAN_API_KEY", "").strip()
+        if env_key:
+            st["api_key"] = env_key
+        env_model = os.environ.get("AI_GUARDIAN_MODEL", "").strip()
+        if env_model:
+            st["model"] = env_model
+        elif st.get("model") in ("claude-fable-5.1", "claude-fable-5"):
+            st["model"] = "claude-opus-5.5"
+        return st
 
 
 def update_state(**kwargs) -> dict:
@@ -350,7 +359,7 @@ def format_ai_guardian_text() -> str:
     ts_now = time.strftime("%H:%M:%S")
 
     return (
-        f"🧠 *Guardião de Risco Cognitivo (Claude Fable 5.1)*\n\n"
+        f"🧠 *Guardião de Risco Cognitivo ({model})*\n\n"
         f"• *Status:* {status_emoji}\n"
         f"• *Motor Cognitivo:* `{model}`\n"
         f"• *API Key:* `{key_masked}`\n"
