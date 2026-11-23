@@ -838,7 +838,7 @@ def build_main_menu_inline_markup():
         [InlineKeyboardButton("🏦 Corretora / API", callback_data="unk_ex:refresh"), InlineKeyboardButton("🎯 Estratégia", callback_data="unk_strat:refresh")],
         [InlineKeyboardButton("📊 Operações Abertas", callback_data="unk_nav:status"), InlineKeyboardButton("💰 Lucros", callback_data="unk_nav:profit")],
         [InlineKeyboardButton("❓ Por Que Não Entrou?", callback_data="unk_nav:why"), InlineKeyboardButton("🩺 Diagnóstico", callback_data="unk_nav:diag")],
-        [InlineKeyboardButton("🔄 Recarregar Painel", callback_data="unk_nav:menu")],
+        [InlineKeyboardButton("👻 Shadow Trading (Neon)", callback_data="unk_nav:shadow"), InlineKeyboardButton("🔄 Recarregar", callback_data="unk_nav:menu")],
     ])
 
 
@@ -1086,10 +1086,11 @@ def build_web_pt_br_script() -> str:
         "  if(!document.body||document.getElementById('unk-cockpit-hud'))return;"
         "  const h=document.createElement('div');h.id='unk-cockpit-hud';"
         "  h.style.cssText='position:fixed;top:0;left:0;right:0;height:36px;z-index:99998;background:linear-gradient(90deg,#0a0f1d,#0f172a);border-bottom:1px solid #14b8a6;display:flex;align-items:center;justify-content:space-between;padding:0 16px;font-family:sans-serif;font-size:12px;color:#f8fafc;box-shadow:0 2px 10px rgba(0,0,0,0.5);';"
-        "  h.innerHTML='<div style=\"display:flex;align-items:center;gap:16px;\"><span style=\"color:#2dd4bf;font-weight:bold;\">⚡ UNKIORRA QUANT COCKPIT</span><span>Modo: <strong id=\"unk-hud-strat-label\" style=\"color:#38bdf8;\">RenderQuantV3_Defensive</strong></span><span>Risco: <strong style=\"color:#4ade80;\">Heat &le; 3.0%</strong></span><span>Circuit Breaker: <strong style=\"color:#4ade80;\">🟢 ARMADO</strong></span></div><div style=\"display:flex;align-items:center;gap:12px;\"><button id=\"unk-hud-strat-btn\" style=\"background:#2563eb;color:#fff;border:none;padding:3px 10px;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;\">🎯 Mudar Estratégia</button><span style=\"background:#0f766e;color:#fff;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;\">LIVE SAFEGUARD</span></div>';"
+        "  h.innerHTML='<div style=\"display:flex;align-items:center;gap:16px;\"><span style=\"color:#2dd4bf;font-weight:bold;\">⚡ UNKIORRA QUANT COCKPIT</span><span>Modo: <strong id=\"unk-hud-strat-label\" style=\"color:#38bdf8;\">RenderQuantV4_Adaptive</strong></span><span>Risco: <strong style=\"color:#4ade80;\">Heat &le; 3.0%</strong></span><span>Circuit Breaker: <strong style=\"color:#4ade80;\">🟢 ARMADO</strong></span></div><div style=\"display:flex;align-items:center;gap:12px;\"><button id=\"unk-hud-shadow-btn\" style=\"background:#7c3aed;color:#fff;border:none;padding:3px 10px;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;\">👻 Shadow Trading</button><button id=\"unk-hud-strat-btn\" style=\"background:#2563eb;color:#fff;border:none;padding:3px 10px;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;\">🎯 Mudar Estratégia</button><span style=\"background:#0f766e;color:#fff;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;\">LIVE SAFEGUARD</span></div>';"
         "  document.body.prepend(h);"
         "  document.body.style.paddingTop='36px';"
         "  const b=document.getElementById('unk-hud-strat-btn');if(b)b.onclick=()=>{if(window.openStratModal)window.openStratModal();};"
+        "  const sb=document.getElementById('unk-hud-shadow-btn');if(sb)sb.onclick=()=>{if(window.openShadowModal)window.openShadowModal();};"
         "}"
         "function mountStratModal(){"
         "  if(!document.body||document.getElementById('unk-strat-btn'))return;"
@@ -1132,12 +1133,55 @@ def build_web_pt_br_script() -> str:
         "    }catch(e){m.textContent='Erro de rede ao salvar estratégia.';}"
         "  };"
         "}"
+        "function mountShadowModal(){"
+        "  if(!document.body||document.getElementById('unk-shadow-ov'))return;"
+        "  const ov=document.createElement('div');ov.id='unk-shadow-ov';"
+        "  ov.style.cssText='display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.6);align-items:center;justify-content:center;';"
+        "  ov.innerHTML='<div style=\"background:#1e293b;color:#f8fafc;padding:22px;border-radius:12px;width:520px;max-width:92vw;font-family:sans-serif;max-height:85vh;overflow-y:auto;\"><h3 style=\"margin:0 0 10px;display:flex;align-items:center;gap:8px;\">👻 Telemetria de Shadow Trading (Neon DB)</h3><p style=\"font-size:12px;color:#94a3b8;margin:0 0 14px;\">Simulação paralela de todos os sinais e vetos da IA em tempo real no Neon PostgreSQL para calibração de estratégias sem risco ao capital real.</p><div id=\"unk-shadow-content\" style=\"font-size:13px;color:#cbd5e1;\">Carregando dados do Neon DB...</div><div style=\"display:flex;gap:8px;justify-content:flex-end;margin-top:16px;\"><button id=\"unk-shadow-refresh\" style=\"padding:8px 12px;border-radius:6px;border:1px solid #7c3aed;background:transparent;color:#c084fc;cursor:pointer;\">🔄 Atualizar</button><button id=\"unk-shadow-close\" style=\"padding:8px 16px;border-radius:6px;border:none;background:#7c3aed;color:#fff;font-weight:600;cursor:pointer;\">Fechar</button></div></div>';"
+        "  document.body.appendChild(ov);"
+        "  window.openShadowModal=async()=>{"
+        "    ov.style.display='flex';"
+        "    const c=document.getElementById('unk-shadow-content');"
+        "    c.innerHTML='<div style=\"padding:20px;text-align:center;\">Carregando telemetria do Neon DB...</div>';"
+        "    const auth=getSessionAuth();"
+        "    if(!auth){c.innerHTML='<div style=\"color:#f87171;\">Autenticação necessária. Faça login no painel.</div>';return;}"
+        "    try{"
+        "      const r=await fetch('/api/v1/unkiorra/shadow',{headers:{Authorization:auth}});"
+        "      if(r.ok){"
+        "        const d=await r.json();"
+        "        let rowsHtml='';"
+        "        if(d.last_trades&&d.last_trades.length){"
+        "          rowsHtml='<table style=\"width:100%;margin-top:10px;font-size:11px;border-collapse:collapse;\"><tr style=\"border-bottom:1px solid #334155;color:#94a3b8;text-align:left;\"><th style=\"padding:4px;\">Par</th><th style=\"padding:4px;\">Taxa</th><th style=\"padding:4px;\">IA</th><th style=\"padding:4px;\">Status</th><th style=\"padding:4px;\">Lucro</th></tr>';"
+        "          d.last_trades.forEach(t=>{"
+        "            const color=t.status==='CLOSED_PROFIT'?'#4ade80':(t.status==='CLOSED_STOPLOSS'?'#f87171':'#38bdf8');"
+        "            const p=t.profit_pct!==null?(t.profit_pct*100).toFixed(2)+'%':'-';"
+        "            const ia=t.ai_approved?'<span style=\"color:#4ade80\">✅ Sim</span>':'<span style=\"color:#f87171\">🛑 Veto</span>';"
+        "            rowsHtml+='<tr style=\"border-bottom:1px solid #334155;\"><td style=\"padding:4px;\">'+t.pair+'</td><td style=\"padding:4px;\">'+t.entry_rate+'</td><td style=\"padding:4px;\">'+ia+'</td><td style=\"padding:4px;color:'+color+'\">'+t.status+'</td><td style=\"padding:4px;color:'+color+'\">'+p+'</td></tr>';"
+        "          });"
+        "          rowsHtml+='</table>';"
+        "        }else{"
+        "          rowsHtml='<p style=\"color:#94a3b8;margin-top:10px;font-style:italic;\">Nenhum sinal registrado ainda nesta sessão.</p>';"
+        "        }"
+        "        c.innerHTML='<div style=\"display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;\">'+"
+        "          '<div style=\"background:#0f172a;padding:10px;border-radius:8px;\"><div style=\"color:#94a3b8;font-size:11px;\">SINAIS MONITORADOS</div><div style=\"font-size:18px;font-weight:bold;color:#38bdf8;\">'+d.total_signals+' <span style=\"font-size:12px;color:#94a3b8;\">('+d.open_signals+' ativos)</span></div></div>'+"
+        "          '<div style=\"background:#0f172a;padding:10px;border-radius:8px;\"><div style=\"color:#94a3b8;font-size:11px;\">TAXA DE ACERTO SIMULADA</div><div style=\"font-size:18px;font-weight:bold;color:#4ade80;\">'+d.win_rate+'% <span style=\"font-size:11px;color:#cbd5e1;\">('+d.closed_profit+' TP / '+d.closed_stop+' SL)</span></div></div>'+"
+        "          '<div style=\"background:#0f172a;padding:10px;border-radius:8px;\"><div style=\"color:#94a3b8;font-size:11px;\">LUCRO ACUMULADO</div><div style=\"font-size:18px;font-weight:bold;color:'+(d.cum_profit_pct>=0?'#4ade80':'#f87171')+';\">'+(d.cum_profit_pct>=0?'+':'')+d.cum_profit_pct+'%</div></div>'+"
+        "          '<div style=\"background:#0f172a;padding:10px;border-radius:8px;\"><div style=\"color:#94a3b8;font-size:11px;\">VETOS IA (OPUS 5.5)</div><div style=\"font-size:18px;font-weight:bold;color:#c084fc;\">'+d.ai_veto_success_rate+'% <span style=\"font-size:11px;color:#94a3b8;\">('+d.ai_vetoes_saved_loss+'/'+d.ai_vetoes_total+')</span></div></div>'+"
+        "          '</div>'+"
+        "          '<h4 style=\"margin:12px 0 6px;color:#e2e8f0;font-size:12px;\">Últimos Sinais Auditados no Neon DB:</h4>'+"
+        "          rowsHtml;"
+        "      }else{c.innerHTML='<div style=\"color:#f87171;\">Falha ao carregar dados do Neon DB.</div>';}"
+        "    }catch(e){c.innerHTML='<div style=\"color:#f87171;\">Erro de conexão com a API.</div>';}"
+        "  };"
+        "  document.getElementById('unk-shadow-close').onclick=()=>{ov.style.display='none';};"
+        "  document.getElementById('unk-shadow-refresh').onclick=()=>window.openShadowModal();"
+        "}"
         "function mountExModal(){""  if(!document.body||document.getElementById('unk-ex-btn'))return;""  const btn=document.createElement('button');btn.id='unk-ex-btn';""  btn.textContent='🏦 Corretora & API';""  btn.style.cssText='position:fixed;bottom:16px;right:16px;z-index:9999;background:#0f766e;color:#fff;border:none;border-radius:999px;padding:10px 16px;font-weight:600;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.3);';""  document.body.appendChild(btn);""  const ov=document.createElement('div');ov.id='unk-ex-ov';""  ov.style.cssText='display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.6);align-items:center;justify-content:center;';""  ov.innerHTML='<div style=\"background:#1e293b;color:#f8fafc;padding:20px;border-radius:12px;width:360px;max-width:92vw;font-family:sans-serif;\"><h3 style=\"margin:0 0 12px\">🏦 Corretora & Chaves API</h3><label style=\"display:block;font-size:12px;margin-top:8px\">Corretora (ex: kraken, binance, bybit, okx)</label><input id=\"unk-ex-name\" style=\"width:100%;padding:8px;margin-top:4px;border-radius:6px;border:1px solid #475569;background:#0f172a;color:#fff;\"/><label style=\"display:block;font-size:12px;margin-top:8px\">API Key</label><input id=\"unk-ex-key\" type=\"password\" placeholder=\"Deixe vazio para manter atual\" style=\"width:100%;padding:8px;margin-top:4px;border-radius:6px;border:1px solid #475569;background:#0f172a;color:#fff;\"/><label style=\"display:block;font-size:12px;margin-top:8px\">API Secret</label><input id=\"unk-ex-sec\" type=\"password\" placeholder=\"Deixe vazio para manter atual\" style=\"width:100%;padding:8px;margin-top:4px;border-radius:6px;border:1px solid #475569;background:#0f172a;color:#fff;\"/><label style=\"display:block;font-size:12px;margin-top:8px\">Passphrase (opcional: OKX/KuCoin)</label><input id=\"unk-ex-pass\" type=\"password\" style=\"width:100%;padding:8px;margin-top:4px;border-radius:6px;border:1px solid #475569;background:#0f172a;color:#fff;\"/><label style=\"display:flex;align-items:center;gap:8px;margin-top:10px;font-size:13px\"><input id=\"unk-ex-dry\" type=\"checkbox\"/> Modo Simulado (Dry-Run)</label><div id=\"unk-ex-msg\" style=\"font-size:12px;margin-top:8px;color:#94a3b8\"></div><div style=\"display:flex;gap:8px;justify-content:flex-end;margin-top:14px\"><button id=\"unk-ex-close\" style=\"padding:8px 12px;border-radius:6px;border:1px solid #475569;background:transparent;color:#fff;cursor:pointer\">Fechar</button><button id=\"unk-ex-save\" style=\"padding:8px 14px;border-radius:6px;border:none;background:#0f766e;color:#fff;font-weight:600;cursor:pointer\">Salvar e Aplicar</button></div></div>';""  document.body.appendChild(ov);""  function getSessionAuth(){try{const raw=localStorage.getItem('ftAuthLoginInfo');if(raw){const p=JSON.parse(raw);const b=p&&typeof p==='object'?Object.values(p)[0]:null;if(b&&b.accessToken)return 'Bearer '+b.accessToken;}}catch(e){}if(!window.__unkAuth){const u=prompt('Usuário da API Freqtrade:');const p=prompt('Senha da API Freqtrade:');if(u&&p)window.__unkAuth='Basic '+btoa(u+':'+p);}return window.__unkAuth||'';}""  btn.onclick=async()=>{ov.style.display='flex';const m=document.getElementById('unk-ex-msg');m.textContent='Carregando...';const auth=getSessionAuth();if(!auth){m.textContent='Autenticação necessária.';return;}try{const r=await fetch('/api/v1/unkiorra/exchange',{headers:{Authorization:auth}});if(r.status===401){window.__unkAuth='';m.textContent='Sessão expirada. Clique novamente.';return;}const d=await r.json();document.getElementById('unk-ex-name').value=d.exchange||'kraken';document.getElementById('unk-ex-dry').checked=!!d.dry_run;m.textContent='Chave atual: '+(d.key_masked||'Não configurada');}catch(e){m.textContent='Erro ao carregar.';}};""  document.getElementById('unk-ex-close').onclick=()=>{ov.style.display='none';};""  document.getElementById('unk-ex-save').onclick=async()=>{const m=document.getElementById('unk-ex-msg');const auth=getSessionAuth();if(!auth){m.textContent='Autenticação necessária.';return;}m.textContent='Salvando...';const body={exchange:document.getElementById('unk-ex-name').value,dry_run:document.getElementById('unk-ex-dry').checked};const k=document.getElementById('unk-ex-key').value,sc=document.getElementById('unk-ex-sec').value,ps=document.getElementById('unk-ex-pass').value;if(k)body.key=k;if(sc)body.secret=sc;if(ps)body.password=ps;try{const r=await fetch('/api/v1/unkiorra/exchange',{method:'POST',headers:{'Content-Type':'application/json',Authorization:auth},body:JSON.stringify(body)});const d=await r.json();m.textContent=r.ok?('Salvo: '+d.exchange+' ('+d.key_masked+'). Recarregando...'):('Erro: '+(d.detail||'falha'));}catch(e){m.textContent='Erro de rede.';}};""}"
         "function runWalk(){"
         "  if(!document.body)return;"
         "  obs.disconnect();"
         "  prefillLogin();"
-        "  walk(document.body);mountCockpitHUD();mountStratModal();mountExModal();"
+        "  walk(document.body);mountCockpitHUD();mountStratModal();mountExModal();mountShadowModal();"
         "  obs.observe(document.body,{childList:true,subtree:true});"
         "}"
         "const obs=new MutationObserver(()=>{"
@@ -1304,6 +1348,14 @@ def install_web_pt_br_hooks() -> None:
             _reload_freqtrade_rpc()
             return res
 
+        async def _unkiorra_get_shadow_handler(request: Request):
+            _check_basic(request)
+            try:
+                from user_data.shadow_tracker import get_shadow_stats
+                return get_shadow_stats()
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=str(exc))
+
         # 1. Registro direto no APIRouter do api_v1 oficial do Freqtrade
         try:
             from freqtrade.rpc.api_server import api_v1
@@ -1313,6 +1365,8 @@ def install_web_pt_br_hooks() -> None:
             for path in ["/unkiorra/exchange", "/api/v1/unkiorra/exchange"]:
                 api_v1.router.add_api_route(path, _unkiorra_get_ex_handler, methods=["GET"])
                 api_v1.router.add_api_route(path, _unkiorra_set_ex_handler, methods=["POST"])
+            for path in ["/unkiorra/shadow", "/api/v1/unkiorra/shadow"]:
+                api_v1.router.add_api_route(path, _unkiorra_get_shadow_handler, methods=["GET"])
             print("PT-BR_ROUTES_REGISTERED_ON_API_V1_ROUTER", flush=True)
         except Exception as exc:
             print("PT-BR_API_V1_ROUTER_WARN:", exc, flush=True)
@@ -1332,6 +1386,8 @@ def install_web_pt_br_hooks() -> None:
                     for path in ["/api/v1/unkiorra/exchange", "/unkiorra/exchange"]:
                         app.add_api_route(path, _unkiorra_get_ex_handler, methods=["GET"])
                         app.add_api_route(path, _unkiorra_set_ex_handler, methods=["POST"])
+                    for path in ["/api/v1/unkiorra/shadow", "/unkiorra/shadow"]:
+                        app.add_api_route(path, _unkiorra_get_shadow_handler, methods=["GET"])
                     print("PT-BR_ROUTES_REGISTERED_ON_API_SERVER_APP", flush=True)
 
             ApiServer.__init__ = patched_api_init
@@ -1652,6 +1708,9 @@ def install_pt_br_hooks() -> None:
             elif sub == "diag":
                 await _cmd_diag(update, context)
                 return
+            elif sub == "shadow":
+                await _cmd_shadow(update, context)
+                return
         if data.startswith("unk_input:"):
             field = data.split(":", 1)[1]
             pending_input[cid] = (field, time.monotonic())
@@ -1914,6 +1973,20 @@ def install_pt_br_hooks() -> None:
         )
         await update.message.reply_text(msg, parse_mode="Markdown")
 
+    async def _cmd_shadow(update, context):
+        if not is_authorized_chat(update):
+            return
+        try:
+            from user_data.shadow_tracker import format_shadow_stats_text
+            msg = format_shadow_stats_text()
+        except Exception as exc:
+            msg = f"⚠️ *Erro na telemetria de shadow trading:* `{exc}`"
+        target = getattr(update, "effective_message", None) or getattr(update, "message", None)
+        if not target and getattr(update, "callback_query", None):
+            target = update.callback_query.message
+        if target:
+            await target.reply_text(msg, parse_mode="Markdown")
+
     async def _btn_cb(update, context):
         tg = tg_ref.get("self")
         if not tg or not update or not update.message or not update.message.text:
@@ -1974,6 +2047,11 @@ def install_pt_br_hooks() -> None:
             await _cmd_why(update, context)
             raise ApplicationHandlerStop()
 
+        if norm in ("/shadow", "shadow", "telemetria", "/telemetria") or "shadow" in norm or txt in ("👻 Shadow Trading", "👻 Shadow Trading (Neon)"):
+            pending_input.pop(cid, None)
+            await _cmd_shadow(update, context)
+            raise ApplicationHandlerStop()
+
         if txt in ("🏦 Corretora", "🏦 Corretora / API") or norm in ("/corretora", "corretora", "exchange"):
             pending_input.pop(cid, None)
             await _cmd_corretora(update, context)
@@ -2032,6 +2110,8 @@ def install_pt_br_hooks() -> None:
             orig_add_handler(self, CommandHandler("why", _cmd_why), group=-1)
             orig_add_handler(self, CommandHandler("diag", _cmd_diag), group=-1)
             orig_add_handler(self, CommandHandler("diagnostico", _cmd_diag), group=-1)
+            orig_add_handler(self, CommandHandler("shadow", _cmd_shadow), group=-1)
+            orig_add_handler(self, CommandHandler("telemetria", _cmd_shadow), group=-1)
             orig_add_handler(self, CommandHandler("set_corretora", _cmd_set_corretora))
             orig_add_handler(self, CommandHandler("set_api", _cmd_set_api))
             orig_add_handler(self, CommandHandler("modo_simulado", lambda u, c: _cmd_modo(u, c, True)))
@@ -2073,6 +2153,7 @@ async def setup_telegram_menu() -> None:
         BotCommand("corretora", "Configurar corretora e chaves API"),
         BotCommand("estrategia", "Mudar estrategia de operacao"),
         BotCommand("status", "Ver operacoes abertas"),
+        BotCommand("shadow", "Telemetria Shadow Trading no Neon DB"),
         BotCommand("why", "Diagnostico do motivo de nao entrar"),
         BotCommand("diag", "Diagnostico de conectividade e saude"),
         BotCommand("profit", "Ver resumo de lucros"),
@@ -2232,6 +2313,25 @@ def start_neon_heartbeat(db_url: str, interval: int = 180) -> None:
     print("[heartbeat] Heartbeat do Neon PostgreSQL ativo (240s)!", flush=True)
 
 
+def start_shadow_sync_worker() -> None:
+    """Worker em background que atualiza status e cotações dos shadow trades no Neon DB."""
+    def _worker():
+        time.sleep(30)
+        while True:
+            try:
+                from user_data.shadow_tracker import sync_all_shadow_trades
+                closed = sync_all_shadow_trades()
+                if closed > 0:
+                    print(f"[shadow_tracker] {closed} shadow trades fechados nesta rodada.", flush=True)
+            except Exception as exc:
+                pass
+            time.sleep(120)
+
+    t = threading.Thread(target=_worker, name="ShadowSyncWorker", daemon=True)
+    t.start()
+    print("[shadow_tracker] Worker de sincronização Neon DB ativo (120s)!", flush=True)
+
+
 def main() -> None:
     assert "Modo Simulação" in translate_pt_br("Dry run is enabled. All trades are simulated.")
     print("PT-BR_SELF_TEST_OK: All translations verified in container!", flush=True)
@@ -2260,6 +2360,15 @@ def main() -> None:
     # Inicia Watchdog de RAM e Heartbeat do Neon Postgres (Tríade de Ouro - Claude Fable 5.1)
     start_ram_watchdog()
     start_neon_heartbeat(db_url)
+
+    # Inicialização da telemetria de Shadow Trading no Neon PostgreSQL
+    try:
+        from user_data.shadow_tracker import ensure_shadow_tables
+        ensure_shadow_tables()
+        print("Neon DB Shadow Trading tables verified/created successfully!", flush=True)
+    except Exception as exc:
+        print("Shadow tables init warning:", exc, flush=True)
+    start_shadow_sync_worker()
 
     os.environ["FREQTRADE__API_SERVER__LISTEN_PORT"] = os.environ.get("PORT", "10000")
     # Correção definitiva: TODOS os overrides entram na runtime config + env nativas.

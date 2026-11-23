@@ -286,6 +286,21 @@ class RenderQuantV4_Adaptive(IStrategy):
                         daily_drawdown_pct=daily_dd,
                         mode="RenderQuantV4_Adaptive",
                     )
+                    # Telemetria de Shadow Trading no Neon PostgreSQL para melhoria contínua das estratégias
+                    try:
+                        from user_data.shadow_tracker import record_shadow_signal
+                        record_shadow_signal(
+                            pair=pair,
+                            strategy="RenderQuantV4_Adaptive",
+                            entry_rate=rate,
+                            entry_tag=entry_tag or "v4_entry",
+                            ai_approved=verdict.get("aprovado", True),
+                            ai_conviccao=verdict.get("conviccao", 0.70),
+                            ai_motivo=verdict.get("motivo", ""),
+                        )
+                    except Exception as exc:
+                        logger.debug("V4: shadow tracker record falhou: %s", exc)
+
                     if not verdict.get("aprovado", True):
                         logger.warning("V4 [AI GUARDIAN VETO]: entrada em %s vetada pela IA: %s", pair, verdict.get("motivo"))
                         return False
