@@ -263,6 +263,34 @@ class RenderQuantV4_Adaptive(IStrategy):
             if (open_heat + incoming) / max(total_balance, 10.0) > max_heat:
                 logger.warning("V4 [HEAT VETO]: heat projetado acima de %.2f%% - %s vetada", max_heat * 100, pair)
                 return False
+
+            # Gatekeeper Cognitivo AI Guardian (Claude Fable via Mirai API)
+            try:
+                from user_data.ai_guardian import consult_ai_guardian, get_state
+                s_ai = get_state()
+                if s_ai.get("enabled", False):
+                    atr_val = 0.02
+                    dp = getattr(self, "dp", None)
+                    if dp is not None:
+                        df, _ = dp.get_analyzed_dataframe(pair, self.timeframe)
+                        if df is not None and not df.empty:
+                            atr_val = float(df["atr_pct"].iloc[-1] or 0.02)
+                    verdict = consult_ai_guardian(
+                        pair=pair,
+                        rate=rate,
+                        ker=0.50,
+                        atr_pct=atr_val,
+                        vol_z=1.0,
+                        regime_bull=True,
+                        daily_drawdown_pct=daily_dd,
+                        mode="RenderQuantV4_Adaptive",
+                    )
+                    if not verdict.get("aprovado", True):
+                        logger.warning("V4 [AI GUARDIAN VETO]: entrada em %s vetada pela IA: %s", pair, verdict.get("motivo"))
+                        return False
+                    logger.info("V4 [AI GUARDIAN PASS]: entrada em %s aprovada pela IA (%.0f%% | %s)", pair, verdict.get("conviccao", 0.70) * 100, verdict.get("motivo"))
+            except Exception as exc:
+                logger.debug("V4: falha não crítica na consulta ao AI Guardian: %s", exc)
         except Exception as exc:
             logger.error("V4 [FAIL-CLOSED]: erro no gate de risco (%s) - %s vetada", exc, pair)
             return False

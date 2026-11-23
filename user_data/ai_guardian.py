@@ -15,6 +15,8 @@ from user_data.state_store import load_state, save_state
 
 logger = logging.getLogger("ai_guardian")
 
+STATE_DB_KEY = "ai_guardian_state"
+
 # Localização do arquivo de estado em disco (persistência robusta no container e no host)
 STATE_PATHS = [
     pathlib.Path("/freqtrade/user_data/ai_guardian_state.json"),
