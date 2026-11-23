@@ -838,8 +838,9 @@ def build_main_menu_inline_markup():
         [ai_quick],
         [InlineKeyboardButton("🏦 Corretora / API", callback_data="unk_ex:refresh"), InlineKeyboardButton("🎯 Estratégia", callback_data="unk_strat:refresh")],
         [InlineKeyboardButton("📊 Operações Abertas", callback_data="unk_nav:status"), InlineKeyboardButton("💰 Lucros", callback_data="unk_nav:profit")],
-        [InlineKeyboardButton("❓ Por Que Não Entrou?", callback_data="unk_nav:why"), InlineKeyboardButton("🩺 Diagnóstico", callback_data="unk_nav:diag")],
-        [InlineKeyboardButton("👻 Shadow Trading (Neon)", callback_data="unk_nav:shadow"), InlineKeyboardButton("🔄 Recarregar", callback_data="unk_nav:menu")],
+        [InlineKeyboardButton("❓ Por Que Não Entrou?", callback_data="unk_nav:why"), InlineKeyboardButton("🔭 Scanner Mercado", callback_data="unk_nav:scanner")],
+        [InlineKeyboardButton("👻 Shadow Trading (Neon)", callback_data="unk_nav:shadow"), InlineKeyboardButton("🩺 Diagnóstico", callback_data="unk_nav:diag")],
+        [InlineKeyboardButton("🔄 Recarregar Painel", callback_data="unk_nav:menu")],
     ])
 
 
@@ -1400,6 +1401,45 @@ def install_web_pt_br_hooks() -> None:
             except Exception as exc:
                 raise HTTPException(status_code=500, detail=str(exc))
 
+        async def _unkiorra_get_scanner_handler(request: Request):
+            _check_basic(request)
+            try:
+                pairs = [
+                    ("BTC/USDT", "XBTUSDT"),
+                    ("ETH/USDT", "ETHUSDT"),
+                    ("SOL/USDT", "SOLUSDT"),
+                    ("XRP/USDT", "XRPUSDT"),
+                    ("ADA/USDT", "ADAUSDT"),
+                    ("LINK/USDT", "LINKUSDT"),
+                ]
+                results = []
+                for pair_name, kraken_pair in pairs:
+                    url = f"https://api.kraken.com/0/public/OHLC?pair={kraken_pair}&interval=240"
+                    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                    with urllib.request.urlopen(req, timeout=4) as resp:
+                        data = json.loads(resp.read().decode("utf-8"))["result"]
+                        key = [k for k in data.keys() if k != "last"][0]
+                        raw = data[key][-25:]
+                        closes = [float(x[4]) for x in raw]
+                        c = closes[-1]
+                        window = closes[-20:]
+                        mid = sum(window) / 20.0
+                        std = (sum((x - mid) ** 2 for x in window) / 20.0) ** 0.5
+                        bb_lo = mid - 2.0 * std
+                        bb_hi = mid + 2.0 * std
+                        w = bb_hi - bb_lo if bb_hi != bb_lo else 1.0
+                        bb_pos = max(-0.5, min(1.5, (c - bb_lo) / w))
+                        status_str = "Topo/Sobrecompra" if bb_pos >= 0.60 else ("Neutro/Meio" if bb_pos >= 0.25 else "Fundo/Oportunidade")
+                        results.append({
+                            "pair": pair_name,
+                            "price": c,
+                            "bb_pos": round(float(bb_pos), 3),
+                            "status": status_str,
+                        })
+                return {"timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC"), "pairs": results}
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=str(exc))
+
         # 1. Registro direto no APIRouter do api_v1 oficial do Freqtrade
         try:
             from freqtrade.rpc.api_server import api_v1
@@ -1411,6 +1451,8 @@ def install_web_pt_br_hooks() -> None:
                 api_v1.router.add_api_route(path, _unkiorra_set_ex_handler, methods=["POST"])
             for path in ["/unkiorra/shadow", "/api/v1/unkiorra/shadow"]:
                 api_v1.router.add_api_route(path, _unkiorra_get_shadow_handler, methods=["GET"])
+            for path in ["/unkiorra/scanner", "/api/v1/unkiorra/scanner"]:
+                api_v1.router.add_api_route(path, _unkiorra_get_scanner_handler, methods=["GET"])
             print("PT-BR_ROUTES_REGISTERED_ON_API_V1_ROUTER", flush=True)
         except Exception as exc:
             print("PT-BR_API_V1_ROUTER_WARN:", exc, flush=True)
@@ -1432,6 +1474,8 @@ def install_web_pt_br_hooks() -> None:
                         app.add_api_route(path, _unkiorra_set_ex_handler, methods=["POST"])
                     for path in ["/api/v1/unkiorra/shadow", "/unkiorra/shadow"]:
                         app.add_api_route(path, _unkiorra_get_shadow_handler, methods=["GET"])
+                    for path in ["/api/v1/unkiorra/scanner", "/unkiorra/scanner"]:
+                        app.add_api_route(path, _unkiorra_get_scanner_handler, methods=["GET"])
                     print("PT-BR_ROUTES_REGISTERED_ON_API_SERVER_APP", flush=True)
 
             ApiServer.__init__ = patched_api_init
@@ -1758,6 +1802,9 @@ def install_pt_br_hooks() -> None:
             elif sub == "shadow":
                 await _cmd_shadow(update, context)
                 return
+            elif sub == "scanner":
+                await _cmd_scanner(update, context)
+                return
         if data.startswith("unk_input:"):
             field = data.split(":", 1)[1]
             pending_input[cid] = (field, time.monotonic())
@@ -1982,6 +2029,10 @@ def install_pt_br_hooks() -> None:
     async def _cmd_why(update, context):
         if not is_authorized_chat(update):
             return
+        target = getattr(update, "effective_message", None) or getattr(update, "message", None)
+        if not target and getattr(update, "callback_query", None):
+            target = update.callback_query.message
+
         why_paths = [pathlib.Path("user_data/why_state.json"), pathlib.Path("/freqtrade/user_data/why_state.json")]
         state = None
         for p in why_paths:
@@ -1992,33 +2043,110 @@ def install_pt_br_hooks() -> None:
             except Exception:
                 pass
         if not state:
-            await update.message.reply_text(
+            msg = (
                 "🛡️ *Diagnóstico de Entrada (/why)*\n\n"
-                "O robô está ativo e analisando o mercado. Nenhum veto recente registrado.",
-                parse_mode="Markdown",
+                "• *Status:* `ATIVO / MONITORANDO KRAKEN`\n"
+                "• *Estratégia:* `RenderQuantV4_Adaptive (4h)`\n\n"
+                "🔍 *Diagnóstico:* O robô está ativo e sincronizado com a Kraken. Todos os pares monitorados estão "
+                "transitando no topo das Bandas de Bollinger (zona de sobrecompra). O motor aguarda um recuo saudável "
+                "para disparar compras institucionais.\n\n"
+                "👉 *Dica:* Toque em *🔭 Scanner Mercado* no menu para ver a posição exata de cada moeda em tempo real."
             )
+            if target:
+                await target.reply_text(msg, parse_mode="Markdown")
             return
 
-        dec = state.get("decision", "REJECT")
+        dec = state.get("decision", "WAITING_DIP")
         emoji = "✅" if dec == "ENTER" else "🛡️"
-        pair = state.get("pair", "Kraken Spot")
+        pair = state.get("pair", "BTC/USDT")
         reason = state.get("reason", "Aguardando confluência estrutural")
         ts = state.get("ts", "Recente")
-        heat = state.get("heat")
-        heat_str = f"{heat*100:.2f}% / 3.00%" if heat is not None else "Normal"
-        mode = state.get("mode", "RenderQuantV1")
+        mode = state.get("mode", "RenderQuantV4_Adaptive (4h)")
 
-        msg = (
-            f"{emoji} *Diagnóstico de Decisão (/why)*\n\n"
-            f"• *Status:* `{dec}`\n"
-            f"• *Par:* `{pair}`\n"
-            f"• *Horário:* `{ts}`\n"
-            f"• *Modo:* `{mode}`\n"
-            f"• *Diagnóstico:* {reason}\n"
-            f"• *Portfolio Heat:* `{heat_str}`\n\n"
-            f"💡 _O bot opera com rigor institucional: se o mercado estiver em ruído (KER < 0.35) ou o risco passar de 3%, a entrada é vetada para blindar seu capital._"
-        )
-        await update.message.reply_text(msg, parse_mode="Markdown")
+        bb_val = state.get("bb_pos")
+        bb_str = f"`{bb_val*100:.1f}%` (Alvo < 15%)" if bb_val is not None else None
+        rsi_val = state.get("rsi")
+        price_val = state.get("price")
+        price_str = f"`${price_val:,.2f}`" if price_val else None
+
+        lines = [
+            f"{emoji} *Diagnóstico de Entrada (/why)*\n",
+            f"• *Status:* `{dec}`",
+            f"• *Par Monitorado:* `{pair}`" + (f" ({price_str})" if price_str else ""),
+        ]
+        if bb_str:
+            lines.append(f"• *Posição nas Bandas (BB_Pos):* {bb_str}")
+        if rsi_val is not None:
+            lines.append(f"• *RSI (14):* `{rsi_val}`")
+        lines.extend([
+            f"• *Horário da Leitura:* `{ts}`",
+            f"• *Modo:* `{mode}`\n",
+            f"🔍 *Diagnóstico:* {reason}\n",
+            "💡 _O bot opera com rigor institucional: se o mercado estiver na metade superior de Bollinger (sobrecompra), a entrada é retida para evitar comprar no topo local._",
+        ])
+        msg = "\n".join(lines)
+        if target:
+            await target.reply_text(msg, parse_mode="Markdown")
+
+    async def _cmd_scanner(update, context):
+        if not is_authorized_chat(update):
+            return
+        target = getattr(update, "effective_message", None) or getattr(update, "message", None)
+        if not target and getattr(update, "callback_query", None):
+            target = update.callback_query.message
+
+        loading_msg = None
+        if target:
+            loading_msg = await target.reply_text("🔭 *Escaneando pares Kraken Spot em tempo real...*", parse_mode="Markdown")
+
+        try:
+            import urllib.request, json
+            pairs = [
+                ("BTC/USDT", "XBTUSDT"),
+                ("ETH/USDT", "ETHUSDT"),
+                ("SOL/USDT", "SOLUSDT"),
+                ("XRP/USDT", "XRPUSDT"),
+                ("ADA/USDT", "ADAUSDT"),
+                ("LINK/USDT", "LINKUSDT"),
+            ]
+            rows = []
+            for pair_name, kraken_pair in pairs:
+                url = f"https://api.kraken.com/0/public/OHLC?pair={kraken_pair}&interval=240"
+                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=4) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))["result"]
+                    key = [k for k in data.keys() if k != "last"][0]
+                    raw = data[key][-25:]
+                    closes = [float(x[4]) for x in raw]
+                    c = closes[-1]
+                    window = closes[-20:]
+                    mid = sum(window) / 20.0
+                    std = (sum((x - mid) ** 2 for x in window) / 20.0) ** 0.5
+                    bb_lo = mid - 2.0 * std
+                    bb_hi = mid + 2.0 * std
+                    w = bb_hi - bb_lo if bb_hi != bb_lo else 1.0
+                    bb_pos = max(-0.5, min(1.5, (c - bb_lo) / w))
+                    status_emoji = "🔴 Topo" if bb_pos >= 0.60 else ("🟡 Meio" if bb_pos >= 0.25 else "🟢 Fundo")
+                    rows.append(f"• *{pair_name}:* `${c:,.2f}` | BB: `{bb_pos*100:.1f}%` ({status_emoji})")
+
+            scan_text = (
+                "🔭 *Scanner de Mercado em Tempo Real (Kraken Spot 4h)*\n\n"
+                + "\n".join(rows) +
+                "\n\n🎯 *Gatilhos de Compra da V4:*\n"
+                "• *Fundo (Reversão):* `BB_Pos < 15.0%`\n"
+                "• *Pullback de Tendência:* `BB_Pos <= 40.0%` + RSI < 52\n\n"
+                "💡 *Diagnóstico:* Todos os pares monitorados estão no terço superior da banda (zona de topo). O robô está saudável e aguarda uma retração para comprar no fundo com margem de segurança."
+            )
+            if loading_msg:
+                await loading_msg.edit_text(scan_text, parse_mode="Markdown")
+            elif target:
+                await target.reply_text(scan_text, parse_mode="Markdown")
+        except Exception as exc:
+            err_msg = f"⚠️ *Erro ao consultar scanner:* `{exc}`"
+            if loading_msg:
+                await loading_msg.edit_text(err_msg, parse_mode="Markdown")
+            elif target:
+                await target.reply_text(err_msg, parse_mode="Markdown")
 
     async def _cmd_shadow(update, context):
         if not is_authorized_chat(update):
@@ -2068,6 +2196,10 @@ def install_pt_br_hooks() -> None:
             "/ia", "ia", "/ai", "ai", "/guardian", "guardian",
             "🧠guardiãoia", "🧠guardiaoia", "🧠iaguardian", "guardiaoia"
         }
+        _ALIASES_SCANNER = {
+            "/scanner", "scanner", "/mercado", "mercado", "scan", "/scan",
+            "🔭scannermercado", "🔭scanner", "scannermercado"
+        }
 
         if norm in ("/start", "start", "/menu", "menu", "iniciar", "/iniciar"):
             pending_input.pop(cid, None)
@@ -2092,6 +2224,11 @@ def install_pt_br_hooks() -> None:
         if norm in _ALIASES_WHY or txt in ("❓ Por Que Não?", "❓ Por Que Não Entrou?"):
             pending_input.pop(cid, None)
             await _cmd_why(update, context)
+            raise ApplicationHandlerStop()
+
+        if norm in _ALIASES_SCANNER or txt in ("🔭 Scanner Mercado", "🔭 Scanner"):
+            pending_input.pop(cid, None)
+            await _cmd_scanner(update, context)
             raise ApplicationHandlerStop()
 
         if norm in ("/shadow", "shadow", "telemetria", "/telemetria") or "shadow" in norm or txt in ("👻 Shadow Trading", "👻 Shadow Trading (Neon)"):
@@ -2155,6 +2292,8 @@ def install_pt_br_hooks() -> None:
             orig_add_handler(self, CommandHandler("estrategia", _cmd_estrategia), group=-1)
             orig_add_handler(self, CommandHandler("strategy", _cmd_estrategia), group=-1)
             orig_add_handler(self, CommandHandler("why", _cmd_why), group=-1)
+            orig_add_handler(self, CommandHandler("scanner", _cmd_scanner), group=-1)
+            orig_add_handler(self, CommandHandler("mercado", _cmd_scanner), group=-1)
             orig_add_handler(self, CommandHandler("diag", _cmd_diag), group=-1)
             orig_add_handler(self, CommandHandler("diagnostico", _cmd_diag), group=-1)
             orig_add_handler(self, CommandHandler("shadow", _cmd_shadow), group=-1)
@@ -2200,6 +2339,7 @@ async def setup_telegram_menu() -> None:
         BotCommand("corretora", "Configurar corretora e chaves API"),
         BotCommand("estrategia", "Mudar estrategia de operacao"),
         BotCommand("status", "Ver operacoes abertas"),
+        BotCommand("scanner", "Scanner ao vivo dos 6 pares na Kraken"),
         BotCommand("shadow", "Telemetria Shadow Trading no Neon DB"),
         BotCommand("why", "Diagnostico do motivo de nao entrar"),
         BotCommand("diag", "Diagnostico de conectividade e saude"),

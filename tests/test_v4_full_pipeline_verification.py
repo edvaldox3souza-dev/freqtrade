@@ -42,6 +42,7 @@ def test_full_pipeline_v4_entry_gate_and_ai_arbitration():
     df["bb_upperband"] = [105.0, 102.0, 100.0, 98.0]
     df["bb_pos"] = [0.40, 0.25, 0.10, 0.05]  # Última vela em 0.05 (abaixo de bb_pos_entry = 0.08)
     df["ema200"] = [90.0, 90.0, 90.0, 90.0]  # Close (91) > EMA200 * 0.90 (81.0)
+    df["ema50"] = [92.0, 92.0, 92.0, 92.0]
     df["candle_range"] = df["high"] - df["low"]
     df["lower_wick"] = np.minimum(df["open"], df["close"]) - df["low"]
     df["lower_wick_ratio"] = df["lower_wick"] / df["candle_range"]

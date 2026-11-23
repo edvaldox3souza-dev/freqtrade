@@ -9,8 +9,10 @@ Inspirada no cruzamento de dados de mercado, NostalgiaForInfinity e SMAOffsetPro
 4. Paridade de Risco e Suporte a Micro-Bancas (Kraken ordermin adaptativo).
 5. Proteções Nativas Freqtrade: CooldownPeriod, StoplossGuard e MaxDrawdown.
 """
+import json
 import logging
-from datetime import datetime
+import pathlib
+from datetime import datetime, timezone
 from typing import Any, Optional, Union
 
 import numpy as np
@@ -26,7 +28,7 @@ class RenderQuantV4_Adaptive(IStrategy):
     INTERFACE_VERSION = 3
     timeframe: str = "4h"
     startup_candle_count: int = 220
-    process_only_new_candles: bool = True
+    process_only_new_candles: bool = False
     can_short: bool = False
 
     # Stop Loss de segurança nativo na Kraken
@@ -78,12 +80,12 @@ class RenderQuantV4_Adaptive(IStrategy):
         ]
 
     # Parâmetros Quantitativos Calibrados
-    bb_pos_entry: float = 0.08          # Fundo relativo da banda inferior (0 a 8%)
+    bb_pos_entry: float = 0.15          # Fundo relativo da banda inferior (0 a 15%)
     ema200_floor: float = 0.90          # Piso estrutural: acima de 90% da EMA200
     bb_pos_exit: float = 0.80           # Saída no topo da banda de Bollinger
     rsi_exit: int = 70                  # Saída por sobrecompra extrema
-    min_vol_usd_24h: float = 3_000_000.0# Mínimo $3M USD negociados em 24h
-    min_wick_ratio: float = 0.18        # Pavio inferior mínimo (rejeição de preço)
+    min_vol_usd_24h: float = 250_000.0  # Mínimo $250k USD negociados em 24h (calibrado para Kraken)
+    min_wick_ratio: float = 0.15        # Pavio inferior mínimo (rejeição de preço)
 
     def informative_pairs(self):
         """Monitora BTC em 4h como termômetro macro do mercado cripto."""
@@ -156,23 +158,86 @@ class RenderQuantV4_Adaptive(IStrategy):
         if dataframe.empty:
             return dataframe
 
-        # Condição de entrada de alta convicção
-        cond = (
-            # 1. Preço na extremidade inferior da Banda de Bollinger
+        close = dataframe["close"]
+        open_p = dataframe["open"]
+        ema50 = dataframe["ema50"] if "ema50" in dataframe.columns else dataframe.get("ema200", close)
+        ema200 = dataframe["ema200"] if "ema200" in dataframe.columns else close
+
+        # Modo 1: Mean Reversion em Fundo (Exaustão de Venda com Retração Inferior)
+        cond_reversion = (
             (dataframe["bb_pos"] < self.bb_pos_entry)
-            # 2. Piso de segurança macro (evita colapso estrutural abaixo de 90% da EMA200)
-            & (dataframe["close"] > dataframe["ema200"] * self.ema200_floor)
-            # 3. Confirmação de rejeição de fundo (pavio inferior expressivo OU candle verde)
-            & ((dataframe["lower_wick_ratio"] >= self.min_wick_ratio) | (dataframe["close"] > dataframe["open"]))
-            # 4. BTC Macro Guard (não compra se BTC estiver despencando)
+            & (close > ema200 * self.ema200_floor)
+            & ((dataframe["lower_wick_ratio"] >= self.min_wick_ratio) | (close > open_p))
             & (dataframe["btc_no_crash"] == True)
-            # 5. Filtro de liquidez mínima em 24h
             & (dataframe["vol_usd_24h"] >= self.min_vol_usd_24h)
             & (dataframe["volume"] > 0)
         )
 
-        dataframe.loc[cond, "enter_long"] = 1
-        dataframe.loc[cond, "enter_tag"] = "V4:adaptive_reversion"
+        # Modo 2: Trend Pullback (Tendência de Alta Estrutural + Recuo Saudável à Média)
+        cond_pullback = (
+            (ema50 > ema200)
+            & (close > ema50)
+            & (dataframe["bb_pos"] <= 0.42)
+            & (dataframe["rsi"] < 52)
+            & ((dataframe["lower_wick_ratio"] >= self.min_wick_ratio) | (close > open_p))
+            & (dataframe["btc_no_crash"] == True)
+            & (dataframe["vol_usd_24h"] >= self.min_vol_usd_24h)
+            & (dataframe["volume"] > 0)
+        )
+
+        dataframe.loc[cond_reversion, "enter_long"] = 1
+        dataframe.loc[cond_reversion, "enter_tag"] = "V4:reversion"
+
+        dataframe.loc[cond_pullback, "enter_long"] = 1
+        dataframe.loc[cond_pullback, "enter_tag"] = "V4:trend_pullback"
+
+        # Atualiza diagnóstico /why para telemetria em tempo real
+        try:
+            pair = metadata.get("pair", "")
+            last_idx = dataframe.index[-1]
+            last_row = dataframe.loc[last_idx]
+            has_sig = bool(dataframe["enter_long"].iloc[-1] == 1) if "enter_long" in dataframe.columns else False
+            bb_p = float(last_row.get("bb_pos", 1.0))
+            rsi_v = float(last_row.get("rsi", 50.0))
+            c_price = float(last_row.get("close", 0.0))
+            vol_v = float(last_row.get("vol_usd_24h", 0.0))
+
+            if pair.startswith("BTC") or has_sig:
+                if has_sig:
+                    reason = f"Confluência de compra confirmada! BB_Pos: {bb_p*100:.1f}% | RSI: {rsi_v:.1f}"
+                    decision = "ENTER"
+                elif bb_p >= 0.55:
+                    reason = (
+                        f"Mercado em topo/sobrecompra (BB_Pos: {bb_p*100:.1f}% | RSI: {rsi_v:.1f}). "
+                        f"Preço na metade superior das Bandas de Bollinger. Comprar agora seria comprar no topo. "
+                        f"Aguardando recuo saudável."
+                    )
+                    decision = "WAITING_DIP"
+                else:
+                    reason = (
+                        f"Preço em consolidação neutra (BB_Pos: {bb_p*100:.1f}% | RSI: {rsi_v:.1f}). "
+                        f"Aguardando retração à banda inferior ou gatilho de momentum."
+                    )
+                    decision = "WAITING_CONFIRMATION"
+
+                why_dict = {
+                    "decision": decision,
+                    "pair": pair,
+                    "price": c_price,
+                    "bb_pos": round(bb_p, 3),
+                    "rsi": round(rsi_v, 1),
+                    "vol_usd_24h": round(vol_v, 0),
+                    "reason": reason,
+                    "mode": "RenderQuantV4_Adaptive (4h)",
+                    "ts": datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M:%S UTC"),
+                }
+                for p_str in ["user_data/why_state.json", "/freqtrade/user_data/why_state.json"]:
+                    p_obj = pathlib.Path(p_str)
+                    p_obj.parent.mkdir(parents=True, exist_ok=True)
+                    p_obj.write_text(json.dumps(why_dict, indent=2), encoding="utf-8")
+        except Exception as exc:
+            logger.debug("Falha ao gravar telemetria why_state: %s", exc)
+
         return dataframe
 
     def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
