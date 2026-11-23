@@ -159,10 +159,11 @@ PT_BR_BUTTON_MAP = {
 WELCOME_PT_BR = (
     "🤖 *Unkiorra Trade Bot*\n\n"
     "✅ *Robô Ativo:* Monitorando oportunidades em tempo real\n"
-    "🏦 *Corretora:* Kraken (`Pares Spot` | `RenderQuantV3_Defensive` `4h`)\n"
-    "🛡️ *Modo:* Simulação (`Dry-Run` — Carteira Virtual: `1000 USD`)\n"
-    "🧠 *Guardião IA:* Claude Fable 5.1 Ativo (`/ia` ou toque em 🧠 Guardião IA)\n"
-    "⚡ *Proteção de Capital:* Ativa (`Mean Reversion` + `StoplossGuard` + `MaxDrawdown`)\n\n"
+    "🏦 *Corretora:* KRAKEN (`Pares Spot` | `RenderQuantV4_Adaptive` `4h`)\n"
+    "🚀 *Modo:* **Conta Real** (`Kraken Spot` — Saldo Real Ativo)\n"
+    "🧠 *Guardião IA:* Claude Opus 5.5 Ativo (`/ia` ou toque em 🧠 Guardião IA)\n"
+    "⚡ *Proteção de Capital:* Ativa (`Mean Reversion` + `StoplossGuard` + `MaxDrawdown`)\n"
+    "👻 *Telemetria:* Shadow Trading Ativo no Neon DB (`/shadow`)\n\n"
     "👇 *Toque nos botões abaixo para controlar o robô:*"
 )
 
@@ -961,6 +962,49 @@ def format_estrategia_text() -> str:
     )
 
 
+def get_welcome_message() -> str:
+    try:
+        ex_st = get_exchange_status()
+        is_dry = bool(ex_st.get("dry_run", False))
+        if os.environ.get("FREQTRADE__DRY_RUN", "").strip().lower() in ("false", "0", "no"):
+            is_dry = False
+        ex_name = str(ex_st.get("exchange", "kraken")).upper()
+    except Exception:
+        is_dry = False
+        ex_name = "KRAKEN"
+
+    try:
+        strat_st = get_strategy_state()
+        active_strat = strat_st.get("active_strategy", "RenderQuantV4_Adaptive")
+    except Exception:
+        active_strat = "RenderQuantV4_Adaptive"
+
+    try:
+        from user_data.ai_guardian import get_state as get_ai_state
+        ai_st = get_ai_state()
+        ai_model = ai_st.get("model", "claude-opus-5.5")
+        ai_on = ai_st.get("enabled", True)
+        ai_desc = f"{ai_model} 🟢 Ativo" if ai_on else f"{ai_model} 🔴 Pausado"
+    except Exception:
+        ai_desc = "claude-opus-5.5 🟢 Ativo"
+
+    if is_dry:
+        mode_line = "🛡️ *Modo:* Simulação (`Dry-Run` — Carteira Virtual: `1000 USD`)"
+    else:
+        mode_line = "🚀 *Modo:* **Conta Real** (`Kraken Spot` — Saldo Real Ativo)"
+
+    return (
+        "🤖 *Unkiorra Trade Bot*\n\n"
+        "✅ *Robô Ativo:* Monitorando oportunidades em tempo real\n"
+        f"🏦 *Corretora:* {ex_name} (`Pares Spot` | `{active_strat}` `4h`)\n"
+        f"{mode_line}\n"
+        f"🧠 *Guardião IA:* {ai_desc} (`/ia` ou toque em 🧠 Guardião IA)\n"
+        "⚡ *Proteção de Capital:* Ativa (`Mean Reversion` + `StoplossGuard` + `MaxDrawdown`)\n"
+        "👻 *Telemetria:* Shadow Trading Ativo no Neon DB (`/shadow`)\n\n"
+        "👇 *Toque nos botões abaixo para controlar o robô:*"
+    )
+
+
 def _get_ai_guardian_module():
     try:
         from user_data import ai_guardian
@@ -1520,6 +1564,8 @@ def translate_pt_br(text: str) -> str:
         return text
     if "Starts the trader" in text and "Stops the trader" in text:
         return HELP_PT_BR
+    if "already running" in text.lower():
+        return get_welcome_message()
     out = text
     for pattern, repl in REGEX_TRANSLATIONS:
         out = pattern.sub(repl, out)
@@ -1617,11 +1663,12 @@ def install_pt_br_hooks() -> None:
             is_authorized_chat(update)
             inline_markup = build_main_menu_inline_markup()
             msg_func = update.message.reply_text if (update and update.message) else update.effective_chat.send_message
+            welcome_text = get_welcome_message()
             try:
-                await msg_func(WELCOME_PT_BR, parse_mode="Markdown", reply_markup=inline_markup)
+                await msg_func(welcome_text, parse_mode="Markdown", reply_markup=inline_markup)
             except Exception as md_err:
                 print(f"[telegram] Fallback texto puro em _cmd_start_panel: {md_err}", flush=True)
-                clean = WELCOME_PT_BR.replace("*", "").replace("`", "").replace("_", "")
+                clean = welcome_text.replace("*", "").replace("`", "").replace("_", "")
                 await msg_func(clean, reply_markup=inline_markup)
         except Exception as exc:
             print(f"[telegram] ERRO em _cmd_start_panel: {exc}", flush=True)
@@ -1681,7 +1728,7 @@ def install_pt_br_hooks() -> None:
             if sub == "menu":
                 try:
                     await q.edit_message_text(
-                        WELCOME_PT_BR,
+                        get_welcome_message(),
                         parse_mode="Markdown",
                         reply_markup=build_main_menu_inline_markup(),
                     )
@@ -2170,9 +2217,10 @@ async def setup_telegram_menu() -> None:
     ]
     await bot.set_my_commands(cmds)
     inline_markup = build_main_menu_inline_markup()
+    welcome_text = get_welcome_message()
     msg = await bot.send_message(
         chat_id=CHAT_ID,
-        text=WELCOME_PT_BR,
+        text=welcome_text,
         parse_mode="Markdown",
         reply_markup=inline_markup,
     )
