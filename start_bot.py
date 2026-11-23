@@ -651,6 +651,26 @@ def ensure_runtime_config(
                 if env_pass and ex_cfg.get("password") != env_pass:
                     ex_cfg["password"] = env_pass
                     changed = True
+                env_dry = os.environ.get("FREQTRADE__DRY_RUN", "").strip().lower() or os.environ.get("DRY_RUN", "").strip().lower()
+                if env_dry in ("false", "0", "no"):
+                    cfg["dry_run"] = False
+                    changed = True
+                    print("PT-BR_BOOT_DRY_RUN_OVERRIDE: false (Conta Real via ENV)", flush=True)
+                elif env_dry in ("true", "1", "yes"):
+                    cfg["dry_run"] = True
+                    changed = True
+                    print("PT-BR_BOOT_DRY_RUN_OVERRIDE: true (Simulado via ENV)", flush=True)
+                else:
+                    try:
+                        from user_data.state_store import load_state
+                        ex_st = load_state("exchange_state", [], {})
+                        if "dry_run" in ex_st:
+                            cfg["dry_run"] = bool(ex_st["dry_run"])
+                            changed = True
+                            print(f"PT-BR_BOOT_DRY_RUN_STATE: {cfg['dry_run']} (Neon DB)", flush=True)
+                    except Exception as exc:
+                        print("PT-BR_BOOT_EX_STATE_WARN:", exc, flush=True)
+
                 ex = cfg.get("exchange", {})
                 if not bool(cfg.get("dry_run", True)) and (not ex.get("key") or not ex.get("secret")):
                     cfg["dry_run"] = True
@@ -773,6 +793,11 @@ def update_exchange_config(
             if not bool(dry_run) and (not ex.get("key") or not ex.get("secret")):
                 raise ValueError("Configure a API Key e API Secret antes de ativar a Conta Real.")
             cfg["dry_run"] = bool(dry_run)
+            try:
+                from user_data.state_store import save_state
+                save_state("exchange_state", {"dry_run": cfg["dry_run"], "exchange": ex.get("name", "kraken")}, [])
+            except Exception as exc:
+                print("PT-BR_EX_STATE_SAVE_WARN:", exc, flush=True)
         _atomic_write_text(dst_path, json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
     return get_exchange_status(dst_path=dst_path)
 
@@ -2271,7 +2296,7 @@ def main() -> None:
         _force = json.loads(RUNTIME_CONFIG_PATH.read_text(encoding="utf-8"))
         _force["strategy"] = boot_strategy
         _force["user_data_dir"] = "/freqtrade/user_data"
-        _force["bot_name"] = "Unkiorra RenderQuantV3"
+        _force["bot_name"] = f"Unkiorra {boot_strategy} Live"
         _atomic_write_text(RUNTIME_CONFIG_PATH, json.dumps(_force, indent=2, ensure_ascii=False) + "\n")
         print("PT-BR_BOOT_FORCE_FINAL:", _force.get("strategy"), "|", _force.get("bot_name"), "|", _force.get("exchange", {}).get("pair_whitelist"), flush=True)
     except Exception as exc:
