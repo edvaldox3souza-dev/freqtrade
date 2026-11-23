@@ -247,8 +247,9 @@ class RenderQuantV4_Adaptive(IStrategy):
                 if r and hasattr(t, "calc_profit_abs"):
                     unreal += float(t.calc_profit_abs(r))
             total_balance = 1000.0
-            if self.wallets is not None:
-                total_balance = float(self.wallets.get_total_stake_amount())
+            wallets = getattr(self, "wallets", None)
+            if wallets is not None:
+                total_balance = float(wallets.get_total_stake_amount())
             daily_dd = (realized + unreal) / max(total_balance, 10.0)
             if daily_dd <= -0.025:
                 logger.warning("V4 [CIRCUIT BREAKER]: dd diário %.2f%% - entrada %s vetada", daily_dd * 100, pair)
