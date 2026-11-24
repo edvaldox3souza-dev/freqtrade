@@ -657,6 +657,11 @@ def ensure_runtime_config(
                     cfg["strategy"] = resolved_strat
                     changed = True
                     print(f"PT-BR_BOOT_STRATEGY_APPLIED: {resolved_strat}", flush=True)
+                strat_tf = "4h" if ("V3" in resolved_strat or "V4" in resolved_strat) else "15m"
+                if cfg.get("timeframe") != strat_tf:
+                    cfg["timeframe"] = strat_tf
+                    changed = True
+                    print(f"PT-BR_BOOT_TIMEFRAME_SYNC: {strat_tf} para {resolved_strat}", flush=True)
                 # FIX 2: chaves da corretora via env vars (persistentes na Render,
                 # sobrevivem a sleep/redeploy). Env tem prioridade sobre /tmp.
                 env_key = (
@@ -976,6 +981,7 @@ def update_strategy_state(strat_name: str) -> dict:
             try:
                 cfg = json.loads(RUNTIME_CONFIG_PATH.read_text(encoding="utf-8"))
                 cfg["strategy"] = strat_name
+                cfg["timeframe"] = "4h" if ("V3" in strat_name or "V4" in strat_name) else "15m"
                 _atomic_write_text(RUNTIME_CONFIG_PATH, json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
             except Exception as exc:
                 print("PT-BR_RUNTIME_STRATEGY_WARN:", exc, flush=True)
@@ -1059,10 +1065,12 @@ def get_welcome_message() -> str:
     else:
         mode_line = "🚀 *Modo:* **Conta Real** (`Kraken Spot` — Saldo Real Ativo)"
 
+    strat_tf = "4h" if ("V3" in active_strat or "V4" in active_strat) else "15m"
+
     return (
         "🤖 *Unkiorra Trade Bot*\n\n"
         "✅ *Robô Ativo:* Monitorando oportunidades em tempo real\n"
-        f"🏦 *Corretora:* {ex_name} (`Pares Spot` | `{active_strat}` `4h`)\n"
+        f"🏦 *Corretora:* {ex_name} (`Pares Spot` | `{active_strat}` `{strat_tf}`)\n"
         f"{mode_line}\n"
         f"🧠 *Guardião IA:* {ai_desc} (`/ia` ou toque em 🧠 Guardião IA)\n"
         "⚡ *Proteção de Capital:* Ativa (`Mean Reversion` + `StoplossGuard` + `MaxDrawdown`)\n"
@@ -2801,6 +2809,7 @@ def main() -> None:
     try:
         _force = json.loads(RUNTIME_CONFIG_PATH.read_text(encoding="utf-8"))
         _force["strategy"] = boot_strategy
+        _force["timeframe"] = "4h" if ("V3" in boot_strategy or "V4" in boot_strategy) else "15m"
         _force["user_data_dir"] = "/freqtrade/user_data"
         _force["bot_name"] = f"Unkiorra {boot_strategy} Live"
         _atomic_write_text(RUNTIME_CONFIG_PATH, json.dumps(_force, indent=2, ensure_ascii=False) + "\n")

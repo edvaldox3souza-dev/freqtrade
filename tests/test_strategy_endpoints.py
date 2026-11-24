@@ -136,3 +136,37 @@ def test_db_get_handles_both_dict_and_str():
         assert res == {"active_strategy": "RenderQuantV2_Institutional"}
 
 
+def test_strategy_timeframe_synchronization(tmp_path):
+    import json
+    src_cfg = tmp_path / "config.src.json"
+    dst_cfg = tmp_path / "config.runtime.json"
+    state_file = tmp_path / "strategy_state.json"
+
+    src_cfg.write_text(json.dumps({"strategy": "RenderQuantV3_Defensive", "timeframe": "4h"}), encoding="utf-8")
+
+    # Caso V1: deve sincronizar timeframe para 15m
+    with patch("start_bot.STRATEGY_STATE_PATH", state_file), \
+         patch("start_bot.RUNTIME_CONFIG_PATH", dst_cfg):
+        start_bot.update_strategy_state("RenderQuantV1")
+        start_bot.ensure_runtime_config(src_path=src_cfg, dst_path=dst_cfg)
+        cfg = json.loads(dst_cfg.read_text(encoding="utf-8"))
+        assert cfg["strategy"] == "RenderQuantV1"
+        assert cfg["timeframe"] == "15m"
+
+        msg = start_bot.get_welcome_message()
+        assert "RenderQuantV1` `15m`" in msg
+
+    # Caso V3: deve manter/sincronizar timeframe para 4h
+    with patch("start_bot.STRATEGY_STATE_PATH", state_file), \
+         patch("start_bot.RUNTIME_CONFIG_PATH", dst_cfg):
+        start_bot.update_strategy_state("RenderQuantV3_Defensive")
+        start_bot.ensure_runtime_config(src_path=src_cfg, dst_path=dst_cfg)
+        cfg = json.loads(dst_cfg.read_text(encoding="utf-8"))
+        assert cfg["strategy"] == "RenderQuantV3_Defensive"
+        assert cfg["timeframe"] == "4h"
+
+        msg = start_bot.get_welcome_message()
+        assert "RenderQuantV3_Defensive` `4h`" in msg
+
+
+
