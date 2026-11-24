@@ -40,7 +40,8 @@ def test_v3_stake_calculation():
     )
     assert stake == 100.0, f"Esperado 100.0 para banca de 1000, obteve {stake}"
 
-    # Caso 2: Micro-banca ($16.29) com min_stake de exchange ($5.70) -> permite $5.70
+    # Caso 2: Micro-banca ($16.29) com min_stake de exchange ($5.70) -> DEVE recusar (0.0)
+    # pois $5.70 representa 35% da banca e viola o cap de 10% ($1.63) e orçamento de risco de 1% ($0.163)
     strat.wallets.get_total_stake_amount.return_value = 16.29
     stake_micro = strat.custom_stake_amount(
         pair="BTC/USDT",
@@ -53,7 +54,7 @@ def test_v3_stake_calculation():
         entry_tag=None,
         side="long",
     )
-    assert stake_micro == 5.70, f"Esperado 5.70 para micro-banca cobrindo min_stake, obteve {stake_micro}"
+    assert stake_micro == 0.0, f"Esperado 0.0 (veto estrito de risco) para micro-banca abaixo do mínimo, obteve {stake_micro}"
 
     # Caso 3: Micro-banca ($16.29) com min_stake inalcançável ($25.00) -> 0.0 (seguro)
     stake_excess = strat.custom_stake_amount(

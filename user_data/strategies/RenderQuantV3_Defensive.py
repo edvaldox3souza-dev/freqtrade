@@ -9,7 +9,7 @@ import json
 import logging
 import pathlib
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import numpy as np
@@ -77,7 +77,7 @@ class RenderQuantV3_Defensive(IStrategy):
     ema200_floor: float = 0.82          # Piso estrutural: compras em repique de ate 18% abaixo da EMA200
     bb_pos_exit: float = 0.75           # Sai na regressao a media
     rsi_exit: int = 68
-    min_vol_usd_24h: float = 300_000.0  # Volume minimo $300k calibrado para liquidez real USDT na Kraken
+    min_vol_usd_24h: float = 200_000.0  # Volume minimo $200k calibrado para liquidez real USDT na Kraken Spot
     tp_atr_mult: float = 1.5
 
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
@@ -169,8 +169,32 @@ class RenderQuantV3_Defensive(IStrategy):
         try:
             if metadata and "pair" in metadata:
                 self._record_telemetry(dataframe, str(metadata.get("pair", "")))
+            dp = getattr(self, "dp", None)
+            runmode = getattr(dp, "runmode", None) if dp is not None else None
+            if runmode is None and isinstance(getattr(self, "config", None), dict):
+                runmode = self.config.get("runmode")
+            rm_str = str(getattr(runmode, "value", runmode)).lower() if runmode is not None else "live"
+            if rm_str in ("live", "dry_run") and not dataframe.empty and dataframe["enter_long"].iloc[-1] == 1:
+                from user_data.ai_guardian import enqueue_ai_pre_evaluation
+                last_row = dataframe.iloc[-1]
+                candle_dt = last_row.get("date")
+                c_ts = candle_dt.timestamp() if hasattr(candle_dt, "timestamp") else None
+                enqueue_ai_pre_evaluation(
+                    pair=str(metadata.get("pair", "")),
+                    rate=float(last_row.get("close", 0.0)),
+                    ker=0.45,
+                    atr_pct=float(last_row.get("atr_pct", 0.02)),
+                    vol_z=1.0,
+                    regime_bull=True,
+                    daily_drawdown_pct=0.0,
+                    mode="RenderQuantV3_Defensive",
+                    side="long",
+                    signal_tag=str(last_row.get("enter_tag", "V3:defensive_mr")),
+                    timeframe_secs=14400,
+                    candle_ts=c_ts,
+                )
         except Exception as exc:  # noqa: BLE001
-            logger.debug("V3: telemetria debug: %s", exc)
+            logger.debug("V3: telemetria/pré-avaliação debug: %s", exc)
         return dataframe
 
     def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
@@ -205,21 +229,26 @@ class RenderQuantV3_Defensive(IStrategy):
         proposed_stake: float, min_stake: float | None, max_stake: float,
         leverage: float, entry_tag: str | None, side: str, **kwargs: Any,
     ) -> float:
-        """Risk parity: 1% da banca por trade, cap 10% (identico ao backtest vencedor), com fallback seguro para ordermin."""
+        """Risk parity: 1% da banca por trade, cap 10%, com reserva de taxas e veto estrito se min_stake violar risco."""
+        if not np.isfinite(max_stake) or max_stake <= 0:
+            return 0.0
         total_wallet = max(float(max_stake), float(proposed_stake), 0.0)
-        if self.wallets is not None:
+        wallets = getattr(self, "wallets", None)
+        if wallets is not None:
             try:
-                total_wallet = float(self.wallets.get_total_stake_amount())
+                total_wallet = float(wallets.get_total_stake_amount())
             except Exception as exc:  # noqa: BLE001
                 logger.debug("V3: fallback wallet balance: %s", exc)
         stop_d = 0.05 + 0.0062  # stop 5% + round-trip estimado
-        stake = min((total_wallet * 0.01) / stop_d, total_wallet * 0.10, float(max_stake))
+        fee_buffer_pct = 0.0062
+        effective_max_stake = float(max_stake) * (1.0 - fee_buffer_pct)
+        stake = min((total_wallet * 0.01) / stop_d, total_wallet * 0.10, effective_max_stake)
         if min_stake is not None and stake < float(min_stake):
-            # Se a carteira cobre a ordem mínima da corretora, permite stake = min_stake
-            if float(min_stake) <= total_wallet:
-                stake = float(min_stake)
-            else:
-                return 0.0
+            logger.warning(
+                "V3 [RISK VETO]: Ordem em %s recusada – min_stake ($%.2f) excede teto aprovado ($%.2f | banca=$%.2f).",
+                pair, float(min_stake), stake, total_wallet,
+            )
+            return 0.0
         if not np.isfinite(stake) or stake <= 0:
             return 0.0
         return round(float(stake), 8)
@@ -231,12 +260,16 @@ class RenderQuantV3_Defensive(IStrategy):
     ) -> bool:
         """Gate de risco fail-closed: circuit breaker diario -2.5% e heat cap 3%."""
         try:
-            today_start = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
+            ct_utc = current_time.replace(tzinfo=UTC) if current_time.tzinfo is None else current_time.astimezone(UTC)
+            today_start = ct_utc.replace(hour=0, minute=0, second=0, microsecond=0)
             closed = Trade.get_trades_proxy(is_open=False)
-            realized = sum(
-                float(t.close_profit_abs or 0.0)
-                for t in closed if getattr(t, "close_date_utc", None) and t.close_date_utc >= today_start
-            )
+            realized = 0.0
+            for t in closed:
+                cdate = getattr(t, "close_date_utc", None)
+                if cdate:
+                    cdate_utc = cdate.replace(tzinfo=UTC) if cdate.tzinfo is None else cdate.astimezone(UTC)
+                    if cdate_utc >= today_start:
+                        realized += float(t.close_profit_abs or 0.0)
             open_tr = Trade.get_trades_proxy(is_open=True)
             unreal = 0.0
             for t in open_tr:
@@ -244,9 +277,10 @@ class RenderQuantV3_Defensive(IStrategy):
                 if r and hasattr(t, "calc_profit_abs"):
                     unreal += float(t.calc_profit_abs(r))
             total_balance = 1000.0
-            if self.wallets is not None:
+            wallets = getattr(self, "wallets", None)
+            if wallets is not None:
                 try:
-                    total_balance = float(self.wallets.get_total_stake_amount())
+                    total_balance = float(wallets.get_total_stake_amount())
                 except Exception as exc:  # noqa: BLE001
                     logger.debug("V3: fallback balance: %s", exc)
             daily_dd = (realized + unreal) / max(total_balance, 10.0)
@@ -266,18 +300,29 @@ class RenderQuantV3_Defensive(IStrategy):
                 logger.warning("V3 [HEAT VETO]: heat projetado acima de %.2f%% - %s vetada", max_heat * 100, pair)
                 return False
 
-            # Gatekeeper Cognitivo AI Guardian (Claude Fable via Mirai API)
+            # Gatekeeper Cognitivo AI Guardian O(1) Não Bloqueante (somente live/dry_run)
             try:
-                from user_data.ai_guardian import consult_ai_guardian, get_state
+                dp_rm = getattr(getattr(self, "dp", None), "runmode", None)
+                if dp_rm is None and isinstance(getattr(self, "config", None), dict):
+                    dp_rm = self.config.get("runmode")
+                rm_str = str(getattr(dp_rm, "value", dp_rm)).lower() if dp_rm is not None else "live"
+                if rm_str not in ("live", "dry_run"):
+                    return True
+
+                from user_data.ai_guardian import get_or_enqueue_ai_verdict, get_state
                 s_ai = get_state()
                 if s_ai.get("enabled", False):
                     atr_val = 0.02
+                    c_ts = None
                     dp = getattr(self, "dp", None)
                     if dp is not None:
                         df, _ = dp.get_analyzed_dataframe(pair, self.timeframe)
                         if df is not None and not df.empty:
                             atr_val = float(df["atr_pct"].iloc[-1] or 0.02)
-                    verdict = consult_ai_guardian(
+                            candle_dt = df.iloc[-1].get("date")
+                            if hasattr(candle_dt, "timestamp"):
+                                c_ts = candle_dt.timestamp()
+                    verdict = get_or_enqueue_ai_verdict(
                         pair=pair,
                         rate=rate,
                         ker=0.45,
@@ -286,8 +331,12 @@ class RenderQuantV3_Defensive(IStrategy):
                         regime_bull=True,
                         daily_drawdown_pct=daily_dd,
                         mode="RenderQuantV3_Defensive",
+                        side=side,
+                        signal_tag=str(entry_tag or ""),
+                        timeframe_secs=14400,
+                        candle_ts=c_ts,
                     )
-                    if not verdict.get("aprovado", True):
+                    if not verdict.get("aprovado", False):
                         logger.warning("V3 [AI GUARDIAN VETO]: entrada em %s vetada pela IA: %s", pair, verdict.get("motivo"))
                         return False
                     logger.info("V3 [AI GUARDIAN PASS]: entrada em %s aprovada pela IA (%.0f%% | %s)", pair, verdict.get("conviccao", 0.70) * 100, verdict.get("motivo"))
@@ -303,10 +352,11 @@ class RenderQuantV3_Defensive(IStrategy):
         current_profit: float, **kwargs: Any,
     ) -> str | bool | None:
         """Take-profit objetivo por ATR (1.5x), como no backtest vencedor."""
-        if self.dp is None:
+        dp = getattr(self, "dp", None)
+        if dp is None:
             return None
         try:
-            df, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+            df, _ = dp.get_analyzed_dataframe(pair, self.timeframe)
             if df is None or df.empty:
                 return None
             atr_pct = float(df["atr_pct"].iloc[-1] or 0.015)

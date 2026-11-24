@@ -133,9 +133,10 @@ class RenderQuantV4_Adaptive(IStrategy):
         if hasattr(self, "config") and self.config:
             stake = self.config.get("stake_currency", "USDT")
         btc_pair = f"BTC/{stake}"
-        if metadata.get("pair") != btc_pair and self.dp is not None:
+        dp = getattr(self, "dp", None)
+        if metadata.get("pair") != btc_pair and dp is not None:
             try:
-                btc_df = self.dp.get_pair_dataframe(btc_pair, self.timeframe)
+                btc_df = dp.get_pair_dataframe(btc_pair, self.timeframe)
                 if btc_df is not None and not btc_df.empty:
                     btc_close = btc_df["close"]
                     btc_ema50 = ta.EMA(btc_df, timeperiod=50)
@@ -233,10 +234,39 @@ class RenderQuantV4_Adaptive(IStrategy):
                 }
                 for p_str in ["user_data/why_state.json", "/freqtrade/user_data/why_state.json"]:
                     p_obj = pathlib.Path(p_str)
-                    p_obj.parent.mkdir(parents=True, exist_ok=True)
-                    p_obj.write_text(json.dumps(why_dict, indent=2), encoding="utf-8")
+                    if p_obj.parent.exists():
+                        p_obj.write_text(json.dumps(why_dict, indent=2), encoding="utf-8")
         except Exception as exc:
             logger.debug("Falha ao gravar telemetria why_state: %s", exc)
+
+        # Pré-avaliação assíncrona não bloqueante para o Guardião IA (somente live/dry_run)
+        try:
+            dp = getattr(self, "dp", None)
+            runmode = getattr(dp, "runmode", None) if dp is not None else None
+            if runmode is None and isinstance(getattr(self, "config", None), dict):
+                runmode = self.config.get("runmode")
+            rm_str = str(getattr(runmode, "value", runmode)).lower() if runmode is not None else "live"
+            if rm_str in ("live", "dry_run") and not dataframe.empty and "enter_long" in dataframe.columns and dataframe["enter_long"].iloc[-1] == 1:
+                from user_data.ai_guardian import enqueue_ai_pre_evaluation
+                last_row = dataframe.iloc[-1]
+                candle_dt = last_row.get("date")
+                c_ts = candle_dt.timestamp() if hasattr(candle_dt, "timestamp") else None
+                enqueue_ai_pre_evaluation(
+                    pair=str(metadata.get("pair", "")),
+                    rate=float(last_row.get("close", 0.0)),
+                    ker=0.50,
+                    atr_pct=float(last_row.get("atr_pct", 0.02)),
+                    vol_z=1.0,
+                    regime_bull=True,
+                    daily_drawdown_pct=0.0,
+                    mode="RenderQuantV4_Adaptive",
+                    side="long",
+                    signal_tag=str(last_row.get("enter_tag", "V4:entry")),
+                    timeframe_secs=14400,
+                    candle_ts=c_ts,
+                )
+        except Exception as exc:
+            logger.debug("V4: pré-avaliação IA ignorada: %s", exc)
 
         return dataframe
 
@@ -274,20 +304,26 @@ class RenderQuantV4_Adaptive(IStrategy):
         proposed_stake: float, min_stake: Optional[float], max_stake: float,
         leverage: float, entry_tag: Optional[str], side: str, **kwargs: Any,
     ) -> float:
-        """Risk parity institucional com fallback seguro para a ordem mínima da Kraken."""
+        """Risk parity institucional com reserva de taxas e veto estrito se min_stake violar risco."""
+        if not np.isfinite(max_stake) or max_stake <= 0:
+            return 0.0
         total_wallet = max(float(max_stake), float(proposed_stake), 0.0)
-        if self.wallets is not None:
+        wallets = getattr(self, "wallets", None)
+        if wallets is not None:
             try:
-                total_wallet = float(self.wallets.get_total_stake_amount())
+                total_wallet = float(wallets.get_total_stake_amount())
             except Exception:
                 pass
         stop_d = 0.05 + 0.0062
-        stake = min((total_wallet * 0.01) / stop_d, total_wallet * 0.10, float(max_stake))
+        fee_buffer_pct = 0.0062
+        effective_max_stake = float(max_stake) * (1.0 - fee_buffer_pct)
+        stake = min((total_wallet * 0.01) / stop_d, total_wallet * 0.10, effective_max_stake)
         if min_stake is not None and stake < float(min_stake):
-            if float(min_stake) <= total_wallet:
-                stake = float(min_stake)
-            else:
-                return 0.0
+            logger.warning(
+                "V4 [RISK VETO]: Ordem em %s recusada – min_stake ($%.2f) excede teto aprovado ($%.2f | banca=$%.2f).",
+                pair, float(min_stake), stake, total_wallet,
+            )
+            return 0.0
         if not np.isfinite(stake) or stake <= 0:
             return 0.0
         return round(float(stake), 8)
@@ -299,12 +335,16 @@ class RenderQuantV4_Adaptive(IStrategy):
     ) -> bool:
         """Gate de risco fail-closed: circuit breaker diário -2.5% e heat cap 3-6%."""
         try:
-            today_start = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
+            ct_utc = current_time.replace(tzinfo=timezone.utc) if current_time.tzinfo is None else current_time.astimezone(timezone.utc)
+            today_start = ct_utc.replace(hour=0, minute=0, second=0, microsecond=0)
             closed = Trade.get_trades_proxy(is_open=False)
-            realized = sum(
-                float(t.close_profit_abs or 0.0)
-                for t in closed if getattr(t, "close_date_utc", None) and t.close_date_utc >= today_start
-            )
+            realized = 0.0
+            for t in closed:
+                cdate = getattr(t, "close_date_utc", None)
+                if cdate:
+                    cdate_utc = cdate.replace(tzinfo=timezone.utc) if cdate.tzinfo is None else cdate.astimezone(timezone.utc)
+                    if cdate_utc >= today_start:
+                        realized += float(t.close_profit_abs or 0.0)
             open_tr = Trade.get_trades_proxy(is_open=True)
             unreal = 0.0
             for t in open_tr:
@@ -330,18 +370,29 @@ class RenderQuantV4_Adaptive(IStrategy):
                 logger.warning("V4 [HEAT VETO]: heat projetado acima de %.2f%% - %s vetada", max_heat * 100, pair)
                 return False
 
-            # Gatekeeper Cognitivo AI Guardian (Claude Fable via Mirai API)
+            # Gatekeeper Cognitivo AI Guardian O(1) Não Bloqueante (somente live/dry_run)
             try:
-                from user_data.ai_guardian import consult_ai_guardian, get_state
+                dp_rm = getattr(getattr(self, "dp", None), "runmode", None)
+                if dp_rm is None and isinstance(getattr(self, "config", None), dict):
+                    dp_rm = self.config.get("runmode")
+                rm_str = str(getattr(dp_rm, "value", dp_rm)).lower() if dp_rm is not None else "live"
+                if rm_str not in ("live", "dry_run"):
+                    return True
+
+                from user_data.ai_guardian import get_or_enqueue_ai_verdict, get_state
                 s_ai = get_state()
                 if s_ai.get("enabled", False):
                     atr_val = 0.02
+                    c_ts = None
                     dp = getattr(self, "dp", None)
                     if dp is not None:
                         df, _ = dp.get_analyzed_dataframe(pair, self.timeframe)
                         if df is not None and not df.empty:
                             atr_val = float(df["atr_pct"].iloc[-1] or 0.02)
-                    verdict = consult_ai_guardian(
+                            candle_dt = df.iloc[-1].get("date")
+                            if hasattr(candle_dt, "timestamp"):
+                                c_ts = candle_dt.timestamp()
+                    verdict = get_or_enqueue_ai_verdict(
                         pair=pair,
                         rate=rate,
                         ker=0.50,
@@ -350,11 +401,15 @@ class RenderQuantV4_Adaptive(IStrategy):
                         regime_bull=True,
                         daily_drawdown_pct=daily_dd,
                         mode="RenderQuantV4_Adaptive",
+                        side=side,
+                        signal_tag=str(entry_tag or ""),
+                        timeframe_secs=14400,
+                        candle_ts=c_ts,
                     )
-                    # Telemetria de Shadow Trading no Neon PostgreSQL para melhoria contínua das estratégias
+                    # Telemetria assíncrona de Shadow Trading no Neon PostgreSQL (não bloqueante)
                     try:
-                        from user_data.shadow_tracker import record_shadow_signal
-                        record_shadow_signal(
+                        from user_data.shadow_tracker import record_shadow_signal_async
+                        record_shadow_signal_async(
                             pair=pair,
                             strategy="RenderQuantV4_Adaptive",
                             entry_rate=rate,

@@ -142,6 +142,16 @@ def record_shadow_signal(
             return None
 
 
+def record_shadow_signal_async(**kwargs: Any) -> None:
+    """Dispara o registro de shadow trade no Neon DB em background sem bloquear confirm_trade_entry."""
+    threading.Thread(
+        target=record_shadow_signal,
+        kwargs=kwargs,
+        daemon=True,
+        name="shadow-record",
+    ).start()
+
+
 def _kraken_symbol_map(pair: str) -> str:
     cleaned = pair.replace("/", "").upper()
     if cleaned.startswith("BTC"):
@@ -286,52 +296,65 @@ def sync_all_shadow_trades() -> int:
 
 def get_shadow_stats() -> Dict[str, Any]:
     """Retorna métricas analíticas consolidadas de Shadow Trading do Neon DB."""
-    default = {
-        "total_signals": 0,
-        "open_signals": 0,
-        "closed_profit": 0,
-        "closed_stop": 0,
-        "win_rate": 0.0,
-        "cum_profit_pct": 0.0,
-        "ai_vetoes_total": 0,
-        "ai_vetoes_saved_loss": 0,
-        "ai_veto_success_rate": 0.0,
-        "last_trades": [],
-    }
+    last_trades: List[Dict[str, Any]] = []
+    total_signals = 0
+    open_signals = 0
+    closed_profit = 0
+    closed_stop = 0
+    win_rate = 0.0
+    cum_profit_pct = 0.0
+    ai_vetoes_total = 0
+    ai_vetoes_saved_loss = 0
+    ai_veto_success_rate = 0.0
+
+    def _snapshot() -> Dict[str, Any]:
+        return {
+            "total_signals": total_signals,
+            "open_signals": open_signals,
+            "closed_profit": closed_profit,
+            "closed_stop": closed_stop,
+            "win_rate": win_rate,
+            "cum_profit_pct": cum_profit_pct,
+            "ai_vetoes_total": ai_vetoes_total,
+            "ai_vetoes_saved_loss": ai_vetoes_saved_loss,
+            "ai_veto_success_rate": ai_veto_success_rate,
+            "last_trades": last_trades,
+        }
+
     try:
         conn = _get_connection()
         if not conn:
-            return default
+            return _snapshot()
 
         with conn.cursor() as cur:
             cur.execute("SELECT count(*) FROM shadow_trades;")
-            default["total_signals"] = int(cur.fetchone()[0] or 0)
+            total_signals = int(cur.fetchone()[0] or 0)
 
             cur.execute("SELECT count(*) FROM shadow_trades WHERE status = 'OPEN';")
-            default["open_signals"] = int(cur.fetchone()[0] or 0)
+            open_signals = int(cur.fetchone()[0] or 0)
 
             cur.execute("SELECT count(*) FROM shadow_trades WHERE status = 'CLOSED_PROFIT';")
-            default["closed_profit"] = int(cur.fetchone()[0] or 0)
+            closed_profit = int(cur.fetchone()[0] or 0)
 
             cur.execute("SELECT count(*) FROM shadow_trades WHERE status = 'CLOSED_STOPLOSS';")
-            default["closed_stop"] = int(cur.fetchone()[0] or 0)
+            closed_stop = int(cur.fetchone()[0] or 0)
 
-            closed_total = default["closed_profit"] + default["closed_stop"]
+            closed_total = closed_profit + closed_stop
             if closed_total > 0:
-                default["win_rate"] = round((default["closed_profit"] / closed_total) * 100.0, 1)
+                win_rate = round((closed_profit / closed_total) * 100.0, 1)
 
             cur.execute("SELECT coalesce(sum(profit_pct), 0) FROM shadow_trades WHERE status LIKE 'CLOSED%';")
-            default["cum_profit_pct"] = round(float(cur.fetchone()[0] or 0.0) * 100.0, 2)
+            cum_profit_pct = round(float(cur.fetchone()[0] or 0.0) * 100.0, 2)
 
             # Eficácia dos Vetos da IA (Quantos trades vetados teriam tomado Stop-Loss)
             cur.execute("SELECT count(*) FROM shadow_trades WHERE ai_approved = false;")
-            default["ai_vetoes_total"] = int(cur.fetchone()[0] or 0)
+            ai_vetoes_total = int(cur.fetchone()[0] or 0)
 
             cur.execute("SELECT count(*) FROM shadow_trades WHERE ai_approved = false AND status = 'CLOSED_STOPLOSS';")
-            default["ai_vetoes_saved_loss"] = int(cur.fetchone()[0] or 0)
+            ai_vetoes_saved_loss = int(cur.fetchone()[0] or 0)
 
-            if default["ai_vetoes_total"] > 0:
-                default["ai_veto_success_rate"] = round((default["ai_vetoes_saved_loss"] / default["ai_vetoes_total"]) * 100.0, 1)
+            if ai_vetoes_total > 0:
+                ai_veto_success_rate = round((ai_vetoes_saved_loss / ai_vetoes_total) * 100.0, 1)
 
             # Últimos 5 trades registrados
             cur.execute(
@@ -343,7 +366,7 @@ def get_shadow_stats() -> Dict[str, Any]:
             )
             rows = cur.fetchall()
             for r in rows:
-                default["last_trades"].append({
+                last_trades.append({
                     "id": r[0],
                     "pair": r[1],
                     "strategy": r[2],
@@ -356,10 +379,10 @@ def get_shadow_stats() -> Dict[str, Any]:
                 })
 
         conn.close()
-        return default
+        return _snapshot()
     except Exception as exc:
         logger.debug("shadow_tracker get_shadow_stats falhou: %s", exc)
-        return default
+        return _snapshot()
 
 
 def format_shadow_stats_text() -> str:

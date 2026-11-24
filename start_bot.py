@@ -693,7 +693,7 @@ def ensure_runtime_config(
                     from user_data.state_store import load_state, save_state
                     ex_st = load_state("exchange_state", [], {})
                     if "dry_run" in ex_st:
-                        target_dry = bool(ex_st["dry_run"]) if base_dry else False
+                        target_dry = bool(ex_st["dry_run"])
                     else:
                         target_dry = base_dry
                 except Exception as exc:
@@ -703,6 +703,9 @@ def ensure_runtime_config(
                 if env_dry in ("false", "0", "no"):
                     target_dry = False
                     print("PT-BR_BOOT_DRY_RUN_SOURCE: false (Conta Real forçada via ENV)", flush=True)
+                elif env_dry in ("true", "1", "yes"):
+                    target_dry = True
+                    print("PT-BR_BOOT_DRY_RUN_SOURCE: true (Dry-Run forçado via ENV)", flush=True)
 
                 ex = cfg.get("exchange", {})
                 if not target_dry and (not ex.get("key") or not ex.get("secret")):
@@ -1366,22 +1369,24 @@ def install_web_pt_br_hooks() -> None:
         from starlette.responses import FileResponse
 
         orig_fr_init = FileResponse.__init__
+        _fr_patch_lock = threading.Lock()
 
         def patched_fr_init(self, path, *args, **kwargs):
             p_str = str(path)
             if p_str.endswith(".html"):
                 try:
-                    raw = pathlib.Path(p_str).read_bytes()
-                    if WEB_PT_BR_MARKER.encode("utf-8") not in raw:
-                        patched = inject_web_pt_br_html(raw)
-                        tmp_path = pathlib.Path("/tmp") / ("pt_br_" + pathlib.Path(p_str).name)
-                        tmp_path.write_bytes(patched)
-                        path = str(tmp_path)
+                    with _fr_patch_lock:
+                        raw = pathlib.Path(p_str).read_bytes()
+                        if WEB_PT_BR_MARKER.encode("utf-8") not in raw:
+                            patched = inject_web_pt_br_html(raw)
+                            tmp_path = pathlib.Path("/tmp") / ("pt_br_" + pathlib.Path(p_str).name)
+                            _atomic_write_text(tmp_path, patched.decode("utf-8", errors="ignore"))
+                            path = str(tmp_path)
                 except Exception as exc:
                     print("PT-BR_FR_HOOK_WARN:", exc, flush=True)
             return orig_fr_init(self, path, *args, **kwargs)
 
-        FileResponse.__init__ = patched_fr_init
+        setattr(FileResponse, "__init__", patched_fr_init)
         print("PT-BR_WEB_UI_HOOK_INSTALLED_V8", flush=True)
     except Exception as exc:
         print("PT-BR_FR_INSTALL_ERR:", exc, flush=True)
@@ -1486,6 +1491,9 @@ def install_web_pt_br_hooks() -> None:
         async def _unkiorra_get_scanner_handler(request: Request):
             _check_basic(request)
             try:
+                strat_name = get_strategy_state().get("active_strategy", "RenderQuantV3_Defensive")
+                is_15m = strat_name in ("RenderQuantV1", "RenderQuantV2_Institutional")
+                interval = 15 if is_15m else 240
                 pairs = [
                     ("BTC/USDT", "XBTUSDT"),
                     ("ETH/USDT", "ETHUSDT"),
@@ -1496,7 +1504,7 @@ def install_web_pt_br_hooks() -> None:
                 ]
                 results = []
                 for pair_name, kraken_pair in pairs:
-                    url = f"https://api.kraken.com/0/public/OHLC?pair={kraken_pair}&interval=240"
+                    url = f"https://api.kraken.com/0/public/OHLC?pair={kraken_pair}&interval={interval}"
                     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
                     with urllib.request.urlopen(req, timeout=4) as resp:
                         data = json.loads(resp.read().decode("utf-8"))["result"]
@@ -1522,19 +1530,15 @@ def install_web_pt_br_hooks() -> None:
             except Exception as exc:
                 raise HTTPException(status_code=500, detail=str(exc))
 
-        # 1. Registro direto no APIRouter do api_v1 oficial do Freqtrade
+        # 1. Registro direto no APIRouter do api_v1 oficial do Freqtrade (já montado sob /api/v1)
         try:
             from freqtrade.rpc.api_server import api_v1
-            for path in ["/unkiorra/strategy", "/api/v1/unkiorra/strategy"]:
-                api_v1.router.add_api_route(path, _unkiorra_get_strat_handler, methods=["GET"])
-                api_v1.router.add_api_route(path, _unkiorra_set_strat_handler, methods=["POST"])
-            for path in ["/unkiorra/exchange", "/api/v1/unkiorra/exchange"]:
-                api_v1.router.add_api_route(path, _unkiorra_get_ex_handler, methods=["GET"])
-                api_v1.router.add_api_route(path, _unkiorra_set_ex_handler, methods=["POST"])
-            for path in ["/unkiorra/shadow", "/api/v1/unkiorra/shadow"]:
-                api_v1.router.add_api_route(path, _unkiorra_get_shadow_handler, methods=["GET"])
-            for path in ["/unkiorra/scanner", "/api/v1/unkiorra/scanner"]:
-                api_v1.router.add_api_route(path, _unkiorra_get_scanner_handler, methods=["GET"])
+            api_v1.router.add_api_route("/unkiorra/strategy", _unkiorra_get_strat_handler, methods=["GET"])
+            api_v1.router.add_api_route("/unkiorra/strategy", _unkiorra_set_strat_handler, methods=["POST"])
+            api_v1.router.add_api_route("/unkiorra/exchange", _unkiorra_get_ex_handler, methods=["GET"])
+            api_v1.router.add_api_route("/unkiorra/exchange", _unkiorra_set_ex_handler, methods=["POST"])
+            api_v1.router.add_api_route("/unkiorra/shadow", _unkiorra_get_shadow_handler, methods=["GET"])
+            api_v1.router.add_api_route("/unkiorra/scanner", _unkiorra_get_scanner_handler, methods=["GET"])
             print("PT-BR_ROUTES_REGISTERED_ON_API_V1_ROUTER", flush=True)
         except Exception as exc:
             print("PT-BR_API_V1_ROUTER_WARN:", exc, flush=True)
@@ -1786,7 +1790,8 @@ def install_pt_br_hooks() -> None:
 
     async def _cmd_start_panel(update, context):
         try:
-            is_authorized_chat(update)
+            if not is_authorized_chat(update):
+                return
             inline_markup = build_main_menu_inline_markup()
             msg_func = update.message.reply_text if (update and update.message) else update.effective_chat.send_message
             welcome_text = get_welcome_message()
@@ -1801,7 +1806,8 @@ def install_pt_br_hooks() -> None:
 
     async def _cmd_corretora(update, context):
         try:
-            is_authorized_chat(update)
+            if not is_authorized_chat(update):
+                return
             text = format_corretora_text()
             markup = build_corretora_inline_markup()
             msg_func = update.message.reply_text if (update and update.message) else update.effective_chat.send_message
@@ -1816,7 +1822,8 @@ def install_pt_br_hooks() -> None:
 
     async def _cmd_ai_guardian(update, context):
         try:
-            is_authorized_chat(update)
+            if not is_authorized_chat(update):
+                return
             cid = str(update.effective_chat.id) if update and update.effective_chat else ""
             print(f"[telegram] _cmd_ai_guardian acionado por chat_id={cid}", flush=True)
             text = format_ai_guardian_text()
@@ -1833,7 +1840,7 @@ def install_pt_br_hooks() -> None:
             if update and update.effective_chat:
                 await update.effective_chat.send_message(f"🧠 Guardião IA (Claude Fable 5.1)\nStatus: Ativo\nAlerta: {exc}")
 
-    pending_input = {}
+    pending_input: dict[str, tuple[str, float]] = {}
 
 
 
@@ -2130,6 +2137,8 @@ def install_pt_br_hooks() -> None:
             active_strat = st_strat.get("active_strategy", "RenderQuantV3_Defensive")
         except Exception:
             pass
+        strat_tf = "4h" if ("V3" in active_strat or "V4" in active_strat) else "15m"
+        strat_desc = "Mean Reversion 4h" if "V3" in active_strat else ("Adaptativa 4h" if "V4" in active_strat else "Pullback/KER 15m")
         diag_msg = (
             "🩺 *Diagnóstico Forense do Sistema (Freqtrade + Render)*\n\n"
             f"• *Telegram RPC:* {'✅ Ativo e Operacional' if TOKEN else '❌ Desativado (Sem Token)'}\n"
@@ -2138,7 +2147,7 @@ def install_pt_br_hooks() -> None:
             f"• *Modo de Operação:* `{mode_str}`\n"
             f"• *Corretora:* `{st.get('exchange', 'kraken').upper()}`\n"
             f"• *Stop-Loss:* `{stop_nativo_diag}`\n"
-            f"• *Estratégia:* `{active_strat}` (4h Mean Reversion — Validada 600d)\n"
+            f"• *Estratégia:* `{active_strat}` (`{strat_tf}` — {strat_desc})\n"
             f"• *Watchdogs:* RAM (420MB) + Neon Anti-Sleep Ativos\n\n"
             "💡 _Seu bot está respondendo normalmente aos comandos._"
         )
@@ -2215,9 +2224,14 @@ def install_pt_br_hooks() -> None:
                 await target.reply_text(msg, parse_mode="Markdown")
             return
 
-        # Fallback dinâmico: se why_state ainda não existe, calcula diretamente via Kraken OHLC
+        # Fallback dinâmico respeitando a estratégia e timeframe ativos
         try:
             import requests as _req
+            active_strat = get_strategy_state().get("active_strategy", "RenderQuantV3_Defensive")
+            is_4h = ("V3" in active_strat or "V4" in active_strat)
+            tf_label = "4h" if is_4h else "15m"
+            interval = 240 if is_4h else 15
+            target_bb = 0.15 if "V4" in active_strat else 0.12
             k_pairs = [
                 ("BTC/USDT", "XBTUSDT"),
                 ("ETH/USDT", "ETHUSDT"),
@@ -2229,7 +2243,7 @@ def install_pt_br_hooks() -> None:
             rows = []
             min_pos = 1.0
             for p_name, kp in k_pairs:
-                url = f"https://api.kraken.com/0/public/OHLC?pair={kp}&interval=240"
+                url = f"https://api.kraken.com/0/public/OHLC?pair={kp}&interval={interval}"
                 r = _req.get(url, headers={"User-Agent": "Freqtrade-Unkiorra/1.0"}, timeout=4)
                 if r.status_code == 200:
                     data = r.json().get("result", {})
@@ -2244,20 +2258,20 @@ def install_pt_br_hooks() -> None:
                     pos = max(-0.5, min(1.5, (c - lo) / w))
                     min_pos = min(min_pos, pos)
                     status = "🔴 Topo" if pos >= 0.60 else ("🟡 Meio" if pos >= 0.25 else "🟢 Fundo")
-                    dist = (pos - 0.12) * 100
-                    rows.append(f"• *{p_name}:* `${c:,.2f}` | BB: `{pos*100:.1f}%` ({status}) | Distância: `+{dist:.1f}%`")
+                    dist = (pos - target_bb) * 100
+                    rows.append(f"• *{p_name}:* `${c:,.2f}` | BB: `{pos*100:.1f}%` ({status}) | Distância: `{dist:+.1f}%`")
 
-            if min_pos < 0.12:
-                diag = "🟢 *Oportunidade:* Ao menos uma moeda atingiu o gatilho de fundo (< 12.0%)."
+            if min_pos < target_bb:
+                diag = f"🟢 *Oportunidade:* Ao menos uma moeda atingiu a zona (< {target_bb*100:.1f}%)."
             elif min_pos < 0.25:
                 diag = "🟡 *Retração em curso:* Monitorando aproximação do fundo."
             else:
-                diag = "🛡️ *Mercado em zona neutra/alta:* Nenhum par atingiu a zona de compra (< 12.0%). Todos os ativos estão no terço médio/superior de Bollinger. O motor aguarda retração na zona de compra para entrar com proteção institucional."
+                diag = f"🛡️ *Mercado em zona neutra/alta:* Nenhum par atingiu a zona de sobrevenda (< {target_bb*100:.1f}%)."
 
             msg = (
                 "🛡️ *Diagnóstico de Entrada (/why)*\n\n"
-                "• *Estratégia:* `RenderQuantV3_Defensive (4h)`\n"
-                "• *Gatilho de Compra V3:* `BB_Pos < 12.0%` (Fundo de Sobrevenda)\n\n"
+                f"• *Estratégia:* `{active_strat} ({tf_label})`\n"
+                f"• *Referência Bollinger:* `BB_Pos < {target_bb*100:.1f}%`\n\n"
                 "📊 *Posição Atual Calculada na Kraken (Tempo Real):*\n"
                 + "\n".join(rows) +
                 f"\n\n🔍 *Diagnóstico Matemático:*\n{diag}"
@@ -2282,6 +2296,11 @@ def install_pt_br_hooks() -> None:
 
         try:
             import requests as _req
+            active_strat = get_strategy_state().get("active_strategy", "RenderQuantV3_Defensive")
+            is_4h = ("V3" in active_strat or "V4" in active_strat)
+            tf_label = "4h" if is_4h else "15m"
+            interval = 240 if is_4h else 15
+            target_bb = 0.15 if "V4" in active_strat else 0.12
             pairs = [
                 ("BTC/USDT", "XBTUSDT"),
                 ("ETH/USDT", "ETHUSDT"),
@@ -2293,7 +2312,7 @@ def install_pt_br_hooks() -> None:
             rows = []
             min_pos = 1.0
             for pair_name, kraken_pair in pairs:
-                url = f"https://api.kraken.com/0/public/OHLC?pair={kraken_pair}&interval=240"
+                url = f"https://api.kraken.com/0/public/OHLC?pair={kraken_pair}&interval={interval}"
                 resp = _req.get(url, headers={"User-Agent": "Freqtrade-Unkiorra/1.0"}, timeout=4)
                 if resp.status_code == 200:
                     data = resp.json().get("result", {})
@@ -2310,24 +2329,22 @@ def install_pt_br_hooks() -> None:
                     bb_pos = max(-0.5, min(1.5, (c - bb_lo) / w))
                     min_pos = min(min_pos, bb_pos)
                     status_emoji = "🔴 Topo" if bb_pos >= 0.60 else ("🟡 Meio" if bb_pos >= 0.25 else "🟢 Fundo")
-                    dist_to_v3 = (bb_pos - 0.12) * 100
-                    dist_str = f"+{dist_to_v3:.1f}%" if dist_to_v3 > 0 else f"{dist_to_v3:.1f}%"
-                    rows.append(f"• *{pair_name}:* `${c:,.2f}` | BB: `{bb_pos*100:.1f}%` ({status_emoji}) | Distância V3: `{dist_str}`")
+                    dist_to_target = (bb_pos - target_bb) * 100
+                    rows.append(f"• *{pair_name}:* `${c:,.2f}` | BB: `{bb_pos*100:.1f}%` ({status_emoji}) | Distância: `{dist_to_target:+.1f}%`")
 
-            if min_pos < 0.12:
-                diag = "🟢 *Oportunidade:* Ao menos uma moeda atingiu o gatilho de fundo (< 12.0%). Motor avaliando compra."
+            if min_pos < target_bb:
+                diag = f"🟢 *Oportunidade:* Ao menos uma moeda atingiu a zona (< {target_bb*100:.1f}%). Motor avaliando compra."
             elif min_pos < 0.25:
                 diag = "🟡 *Aproximação:* Moedas em retração intermediária. Monitorando aproximação do fundo."
             else:
-                diag = "🛡️ *Sem risco de topo:* Todos os pares monitorados estão na metade neutra/superior da banda. Robô saudável e aguardando retração na zona de compra (< 12.0%)."
+                diag = f"🛡️ *Sem risco de topo:* Todos os pares estão acima da zona de sobrevenda (< {target_bb*100:.1f}%)."
 
             scan_text = (
-                "🔭 *Scanner de Mercado em Tempo Real (Kraken Spot 4h)*\n\n"
+                f"🔭 *Scanner de Mercado em Tempo Real (Kraken Spot {tf_label} — `{active_strat}`)*\n\n"
                 + "\n".join(rows) +
-                "\n\n🎯 *Gatilhos de Compra da V3 Calibrada:*\n"
-                "• *Fundo de Sobrevenda (Reversão):* `BB_Pos < 12.0%`\n"
-                "• *Piso Estrutural:* Preço > 82% da EMA200 (4h)\n"
-                "• *Liquidez 24h:* Volume acumulado >= $300.000 USDT\n\n"
+                "\n\n🎯 *Referência do Filtro Ativo:*\n"
+                f"• *Bandas de Bollinger ({tf_label}):* `BB_Pos < {target_bb*100:.1f}%`\n"
+                "• *Liquidez 24h:* `>= $150.000 USDT` na Kraken Spot\n\n"
                 f"💡 *Diagnóstico Dinâmico:* {diag}"
             )
             if loading_msg:
@@ -2721,7 +2738,7 @@ def start_shadow_sync_worker() -> None:
                 if closed > 0:
                     print(f"[shadow_tracker] {closed} shadow trades fechados nesta rodada.", flush=True)
             except Exception as exc:
-                pass
+                print(f"[shadow_tracker] alerta no worker de sincronização: {exc}", flush=True)
             time.sleep(120)
 
     t = threading.Thread(target=_worker, name="ShadowSyncWorker", daemon=True)

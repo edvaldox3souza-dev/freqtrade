@@ -81,7 +81,7 @@ class RenderQuantV1(IStrategy):
     KER_MIN_V1: float = 0.35               # Filtro de efici?ncia para modo V1 (veto de chop/ru?do)
     KER_MIN_V2: float = 0.42               # Filtro de efici?ncia para modo V2 Institucional
     portfolio_heat_limit: float = 0.03     # Hard cap de 3.0% de risco total aberto agregado sobre o equity
-    min_24h_volume_usd: float = 2_000_000.0 # M?nimo $2M USD negociados nas ?ltimas 24h (anti-slippage)
+    min_24h_volume_usd: float = 200_000.0   # Mínimo $200k USD/24h calibrado para liquidez real USDT na Kraken Spot
 
     # Clusters de Correla??o (HyperGrok) - Evita risco direcional duplicado nos 6 pares l?quidos
     CORRELATION_CLUSTERS = {
@@ -120,8 +120,8 @@ class RenderQuantV1(IStrategy):
             "mode": self._cached_strategy_mode,
         }
         try:
-            from user_data.state_store import save_state
-            save_state("why_state", payload, [self.WHY_STATE_FILE, pathlib.Path("/freqtrade/user_data/why_state.json")])
+            from user_data.state_store import save_state_async
+            save_state_async("why_state", payload, [self.WHY_STATE_FILE, pathlib.Path("/freqtrade/user_data/why_state.json")])
         except Exception:
             pass
 
@@ -372,6 +372,37 @@ class RenderQuantV1(IStrategy):
         else:
             dataframe.loc[entry_conditions, "enter_tag"] = "V1:equilibrada_pullback"
 
+        # Pré-avaliação assíncrona não bloqueante para o Guardião IA (somente live/dry_run)
+        try:
+            dp = getattr(self, "dp", None)
+            runmode = getattr(dp, "runmode", None) if dp is not None else None
+            if runmode is None and isinstance(getattr(self, "config", None), dict):
+                runmode = self.config.get("runmode")
+            rm_str = str(getattr(runmode, "value", runmode)).lower() if runmode is not None else "live"
+            is_operational_mode = rm_str in ("live", "dry_run")
+
+            if is_operational_mode and not dataframe.empty and dataframe["enter_long"].iloc[-1] == 1:
+                from user_data.ai_guardian import enqueue_ai_pre_evaluation
+                last_row = dataframe.iloc[-1]
+                candle_dt = last_row.get("date")
+                c_ts = candle_dt.timestamp() if hasattr(candle_dt, "timestamp") else None
+                enqueue_ai_pre_evaluation(
+                    pair=str(metadata.get("pair", "")),
+                    rate=float(last_row.get("close", 0.0)),
+                    ker=float(last_row.get("ker", 0.40)),
+                    atr_pct=float(last_row.get("atr_pct", 0.018)),
+                    vol_z=float(last_row.get("vol_modified_z", 1.0)),
+                    regime_bull=bool(last_row.get("market_regime_bull", True)),
+                    daily_drawdown_pct=0.0,
+                    mode=self._get_active_strategy_mode(),
+                    side="long",
+                    signal_tag=str(last_row.get("enter_tag", "")),
+                    timeframe_secs=900,
+                    candle_ts=c_ts,
+                )
+        except Exception as exc:
+            logger.debug("RenderQuant: pré-avaliação IA ignorada: %s", exc)
+
         return dataframe
 
     def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
@@ -412,9 +443,10 @@ class RenderQuantV1(IStrategy):
         """
         today = current_time.astimezone(UTC).date()
         total_balance = 1000.0
-        if self.wallets is not None:
+        wallets = getattr(self, "wallets", None)
+        if wallets is not None:
             try:
-                total_balance = float(self.wallets.get_total_stake_amount())
+                total_balance = float(wallets.get_total_stake_amount())
             except Exception:
                 pass
 
@@ -444,10 +476,11 @@ class RenderQuantV1(IStrategy):
             self.start_of_day_equity = total_balance
             logger.info("RenderQuant: Novo dia UTC iniciado (%s). Equity base: $%.2f", today, total_balance)
 
-        # 0. Filtro de Fric??o: Spread Guard Din?mico (Claude Fable 5.1)
-        if self.dp is not None:
+        # 0. Filtro de Fricção: Spread Guard Dinâmico (Claude Fable 5.1)
+        dp = getattr(self, "dp", None)
+        if dp is not None:
             try:
-                ticker = self.dp.ticker(pair)
+                ticker = dp.ticker(pair)
                 if ticker and "bid" in ticker and "ask" in ticker and ticker["bid"] and ticker["bid"] > 0:
                     bid = float(ticker["bid"])
                     ask = float(ticker["ask"])
@@ -467,9 +500,9 @@ class RenderQuantV1(IStrategy):
         except Exception:
             pass
         btc_pair = f"BTC/{stake}"
-        if pair != btc_pair and self.dp is not None:
+        if pair != btc_pair and dp is not None:
             try:
-                btc_df, _ = self.dp.get_analyzed_dataframe(btc_pair, self.timeframe)
+                btc_df, _ = dp.get_analyzed_dataframe(btc_pair, self.timeframe)
                 if btc_df is not None and not btc_df.empty:
                     last_btc = btc_df.iloc[-1]
                     btc_c = float(last_btc.get("close", 0.0))
@@ -592,25 +625,37 @@ class RenderQuantV1(IStrategy):
             self._record_decision(pair, "REJECT", f"Falha na avalia??o de risco/heat: {exc}")
             return False
 
-        # 4. Gatekeeper Cognitivo AI Guardian (Mirai API / Claude Fable 5.1 - Claude Fable 5.1)
+        # 4. Gatekeeper Cognitivo AI Guardian O(1) Não Bloqueante (somente live/dry_run)
         try:
-            from user_data.ai_guardian import consult_ai_guardian, get_state
+            dp_rm = getattr(getattr(self, "dp", None), "runmode", None)
+            if dp_rm is None and isinstance(getattr(self, "config", None), dict):
+                dp_rm = self.config.get("runmode")
+            rm_str = str(getattr(dp_rm, "value", dp_rm)).lower() if dp_rm is not None else "live"
+            if rm_str not in ("live", "dry_run"):
+                return True
+
+            from user_data.ai_guardian import get_or_enqueue_ai_verdict, get_state
             ai_state = get_state()
             if ai_state.get("enabled", False):
                 ker_val = 0.40
                 atr_val = 0.018
                 vol_z_val = 1.0
                 regime_bull_val = True
-                if self.dp is not None:
-                    dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+                c_ts = None
+                dp = getattr(self, "dp", None)
+                if dp is not None:
+                    dataframe, _ = dp.get_analyzed_dataframe(pair, self.timeframe)
                     if dataframe is not None and not dataframe.empty:
                         last_row = dataframe.iloc[-1]
                         ker_val = float(last_row.get("ker", 0.40))
                         atr_val = float(last_row.get("atr_pct", 0.018))
                         vol_z_val = float(last_row.get("vol_modified_z", 1.0))
                         regime_bull_val = bool(last_row.get("market_regime_bull", True))
+                        candle_dt = last_row.get("date")
+                        if hasattr(candle_dt, "timestamp"):
+                            c_ts = candle_dt.timestamp()
 
-                verdict = consult_ai_guardian(
+                verdict = get_or_enqueue_ai_verdict(
                     pair=pair,
                     rate=rate,
                     ker=ker_val,
@@ -618,23 +663,41 @@ class RenderQuantV1(IStrategy):
                     vol_z=vol_z_val,
                     regime_bull=regime_bull_val,
                     daily_drawdown_pct=daily_dd_pct if 'daily_dd_pct' in locals() else 0.0,
-                    mode=self._cached_strategy_mode,
+                    mode=self._get_active_strategy_mode(),
+                    side=side,
+                    signal_tag=str(entry_tag or ""),
+                    timeframe_secs=900,
+                    candle_ts=c_ts,
                 )
 
-                if not verdict.get("aprovado", True):
+                try:
+                    from user_data.shadow_tracker import record_shadow_signal_async
+                    record_shadow_signal_async(
+                        pair=pair,
+                        strategy=self._get_active_strategy_mode(),
+                        entry_rate=rate,
+                        entry_tag=str(entry_tag or "v1_entry"),
+                        ai_approved=bool(verdict.get("aprovado", False)),
+                        ai_conviccao=float(verdict.get("conviccao", 0.0)),
+                        ai_motivo=str(verdict.get("motivo", "")),
+                    )
+                except Exception as exc:
+                    logger.debug("RenderQuant: shadow tracker record falhou: %s", exc)
+
+                if not verdict.get("aprovado", False):
                     motivo_ia = verdict.get("motivo", "Veto emitido pela IA")
                     logger.info("RenderQuant [AI GUARDIAN VETO]: Entrada em %s vetada pela IA: %s", pair, motivo_ia)
                     self._record_decision(pair, "REJECT", f"IA Guardian: {motivo_ia}")
                     return False
 
                 logger.info(
-                    "RenderQuant [AI GUARDIAN PASS]: Entrada em %s aprovada pela IA (Convic??o: %.0f%% | %s)",
+                    "RenderQuant [AI GUARDIAN PASS]: Entrada em %s aprovada pela IA (Convicção: %.0f%% | %s)",
                     pair,
                     verdict.get("conviccao", 0.70) * 100,
                     verdict.get("motivo"),
                 )
         except Exception as exc:
-            logger.debug("RenderQuant: Falha n?o cr?tica na consulta ao AI Guardian: %s", exc)
+            logger.debug("RenderQuant: Falha não crítica na consulta ao AI Guardian: %s", exc)
 
         return True
 
@@ -651,34 +714,55 @@ class RenderQuantV1(IStrategy):
         side: str,
         **kwargs: Any,
     ) -> float:
-        """Fase 1 (ml4t/skills): Volatility-Targeted Inverse Position Sizing.
+        """Sizing Institucional com Risk Parity Real e Fallback Seguro para Micro-Carteiras.
 
-        Stake = risk_budget / stressed_dist_pct, onde a dist?ncia de stop ?
-        proporcional ? volatilidade realizada (ATR) do par, com custos reais
-        de corretora e slippage. Equaliza o risco em d?lares de cada aposta.
-        Preserva travas institucionais: regime lateral, Quarter-Kelly (N >= 200) e cap de carteira.
+        Regra Matemática e Limites de Risco (Fase 3):
+        - Carteira Institucional / Normal: Sizing por ATR/volatilidade, cap de 10% (V1) ou 8% (V2).
+        - Micro-Carteira (Kraken Spot, bancas < $50 USD):
+          Se o stake calculado ficar abaixo de min_stake da exchange, permite elevar para min_stake
+          SOMENTE SE:
+          1. min_stake <= max_stake (há saldo livre nas wallets para cobrir a ordem);
+          2. min_stake <= total_wallet * 0.40 (a ordem não compromete mais de 40% da micro-banca);
+          3. min_stake <= (total_wallet - fee_reserve) (mantém reserva mínima de 2% ou $0.50 para taxas).
+          Caso contrário, recusa com log explicativo e retorna 0.0, prevenindo violação da gestão de risco.
         """
+        # Se max_stake for inválido ou zero
+        if not np.isfinite(max_stake) or max_stake <= 0:
+            return 0.0
+
+        # Se min_stake for superior ao saldo disponível (max_stake), impossível executar
+        if min_stake is not None and float(min_stake) > float(max_stake):
+            logger.warning(
+                "RenderQuant [INSUFFICIENT FUNDS]: Ordem em %s recusada – min_stake ($%.2f) excede saldo disponível ($%.2f).",
+                pair,
+                float(min_stake),
+                float(max_stake),
+            )
+            return 0.0
+
         mode = self._get_active_strategy_mode()
         is_v2 = (mode == "RenderQuantV2_Institutional")
 
-        # Par?metros de risco calibrados conforme o modo ativo
+        # Parâmetros de risco calibrados conforme o modo ativo
         active_risk_pct = 0.0075 if is_v2 else self.max_risk_pct_per_trade  # 0.75% vs 1.0%
         active_stake_ratio = 0.08 if is_v2 else self.max_stake_ratio        # 8% vs 10%
         lateral_multiplier = 0.65 if is_v2 else 0.75                       # -35% vs -25% em range
 
         # 0. Wallet total (fallback defensivo)
         total_wallet = max(float(max_stake), float(proposed_stake), 0.0)
-        if self.wallets is not None:
+        wallets = getattr(self, "wallets", None)
+        if wallets is not None:
             try:
-                total_wallet = float(self.wallets.get_total_stake_amount())
+                total_wallet = float(wallets.get_total_stake_amount())
             except Exception:
                 pass
 
-        # 1. Volatilidade realizada (ml4t/skills) -> dist?ncia de stop proporcional ao ru?do real do ativo
+        # 1. Volatilidade realizada (ml4t/skills) -> distância de stop proporcional ao ruído real do ativo
         atr_pct = 0.018  # fallback robusto (1.8%)
-        if self.dp is not None:
+        dp = getattr(self, "dp", None)
+        if dp is not None:
             try:
-                dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+                dataframe, _ = dp.get_analyzed_dataframe(pair, self.timeframe)
                 if dataframe is not None and not dataframe.empty and "atr_pct" in dataframe.columns:
                     raw_atr = float(dataframe["atr_pct"].iloc[-1])
                     if np.isfinite(raw_atr) and raw_atr > 0:
@@ -688,21 +772,21 @@ class RenderQuantV1(IStrategy):
 
         vol_stop_pct = float(np.clip(atr_pct * 2.2, 0.020, 0.060))
 
-        # 2. Custos reais: taker na entrada + taker na sa?da + slippage
+        # 2. Custos reais: taker na entrada + taker na saída + slippage
         stressed_dist_pct = vol_stop_pct + (self.taker_fee_pct * 2.0) + (self.slip_floor_bps / 10000.0)
 
-        # 3. Sizing inverso (ml4t): or?amento de risco / dist?ncia estressada
+        # 3. Sizing inverso (ml4t): orçamento de risco / distância estressada
         risk_budget = total_wallet * active_risk_pct
         if stressed_dist_pct > 0:
             calculated_stake = risk_budget / stressed_dist_pct
         else:
             calculated_stake = proposed_stake
 
-        # 4a. Multiplicador por Regime de Mercado (lateral/bear reduz exposi??o - Maverick)
-        if self.dp is not None:
+        # 4a. Multiplicador por Regime de Mercado (lateral/bear reduz exposição - Maverick)
+        if dp is not None:
             try:
-                dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
-                if dataframe is not None and not dataframe.empty:
+                dataframe, _ = dp.get_analyzed_dataframe(pair, self.timeframe)
+                if dataframe is not None and not dataframe.empty and "market_regime_bull" in dataframe.columns:
                     is_bull = bool(dataframe["market_regime_bull"].iloc[-1])
                     if not is_bull:
                         calculated_stake *= lateral_multiplier
@@ -736,16 +820,26 @@ class RenderQuantV1(IStrategy):
         except Exception:
             pass
 
-        # 4c. Cap m?ximo de carteira (8% V2 / 10% V1)
-        cap = min(calculated_stake, total_wallet * active_stake_ratio, float(max_stake))
+        # 4c. Cap máximo padrão de carteira (10% V1 / 8% V2) e reserva efetiva de taxas sobre saldo livre
+        # Na Kraken Spot, taxas taker (0.26%/lado) + slippage (~0.10%) exigem margem livre no saldo.
+        fee_buffer_pct = (self.taker_fee_pct * 2.0) + (self.slip_floor_bps / 10000.0)
+        effective_max_stake = float(max_stake) * (1.0 - fee_buffer_pct)
+        cap = min(calculated_stake, total_wallet * active_stake_ratio, effective_max_stake)
 
-        # 4d. Trava de min_stake da corretora
+        # 4d. Trava estrita de min_stake da corretora (Regra 1 - Sem exceção que viole risco aprovado)
+        # Se o lote mínimo da corretora exceder o cap de risco/exposição ou o saldo livre pós-taxas,
+        # a estratégia DEVE recusar a operação explicitamente.
         if min_stake is not None and cap < float(min_stake):
+            f_min_stake = float(min_stake)
             logger.warning(
-                "RenderQuant [MIN_STAKE VETO]: Ordem em %s descartada ? stake calculado ($%.2f) abaixo do m?nimo da corretora ($%.2f).",
+                "RenderQuant [RISK VETO]: Ordem em %s recusada – min_stake ($%.2f) excede o teto de risco/exposição "
+                "aprovado ($%.2f | cap=%.0f%% de $%.2f | max_stake pós-taxas=$%.2f).",
                 pair,
+                f_min_stake,
                 cap,
-                float(min_stake),
+                active_stake_ratio * 100.0,
+                total_wallet,
+                effective_max_stake,
             )
             return 0.0
 
@@ -769,8 +863,9 @@ class RenderQuantV1(IStrategy):
     ) -> float:
         """Trailing Stop Escalonado com Breakeven P?s-Taxas (Tr?ade de Ouro - Claude Fable 5.1)."""
         atr_pct = 0.015
-        if self.dp is not None:
-            dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+        dp = getattr(self, "dp", None)
+        if dp is not None:
+            dataframe, _ = dp.get_analyzed_dataframe(pair, self.timeframe)
             if dataframe is not None and not dataframe.empty and "atr_pct" in dataframe.columns:
                 val = float(dataframe["atr_pct"].iloc[-1])
                 if np.isfinite(val) and val > 0:
@@ -833,12 +928,21 @@ class RenderQuantV1(IStrategy):
         if (now_ts - last_check) < 900.0:
             return None
 
-        # Coleta dados t?cnicos atuais do par
+        # Proteção de Backtesting/Hyperopt: nunca chamar IA externa fora de live/dry_run
+        dp = getattr(self, "dp", None)
+        dp_rm = getattr(dp, "runmode", None) if dp is not None else None
+        if dp_rm is None and isinstance(getattr(self, "config", None), dict):
+            dp_rm = self.config.get("runmode")
+        rm_str = str(getattr(dp_rm, "value", dp_rm)).lower() if dp_rm is not None else "live"
+        if rm_str not in ("live", "dry_run"):
+            return None
+
+        # Coleta dados técnicos atuais do par
         ker_val = 0.40
         atr_val = 0.018
         regime_bull_val = True
-        if self.dp is not None:
-            dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+        if dp is not None:
+            dataframe, _ = dp.get_analyzed_dataframe(pair, self.timeframe)
             if dataframe is not None and not dataframe.empty:
                 last_row = dataframe.iloc[-1]
                 ker_val = float(last_row.get("ker", 0.40))
@@ -872,9 +976,10 @@ class RenderQuantV1(IStrategy):
     def get_risk_status(self) -> dict[str, Any]:
         """Snapshot quantitativo em tempo real para o Telegram e Painel Web (Claude Fable 5.1)."""
         total_balance = 1000.0
-        if self.wallets is not None:
+        wallets = getattr(self, "wallets", None)
+        if wallets is not None:
             try:
-                total_balance = float(self.wallets.get_total_stake_amount())
+                total_balance = float(wallets.get_total_stake_amount())
             except Exception:
                 pass
 

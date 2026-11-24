@@ -9,10 +9,20 @@ import logging
 import os
 import pathlib
 import threading
+import time
 
 logger = logging.getLogger("state_store")
 
 _STATE_LOCK = threading.RLock()
+_TABLE_ENSURED = False
+_MEM_CACHE: dict[str, tuple[float, dict]] = {}
+_DEFAULT_CACHE_TTL_SECS = 5.0
+
+
+def clear_state_cache() -> None:
+    """Limpa o cache em memória do state_store (útil em testes)."""
+    with _STATE_LOCK:
+        _MEM_CACHE.clear()
 
 
 def _db_dsn() -> str | None:
@@ -34,6 +44,9 @@ def _connect():
 
 
 def _ensure_table(conn) -> None:
+    global _TABLE_ENSURED
+    if _TABLE_ENSURED:
+        return
     with conn.cursor() as cur:
         cur.execute(
             "CREATE TABLE IF NOT EXISTS bot_state ("
@@ -43,6 +56,7 @@ def _ensure_table(conn) -> None:
             ")"
         )
     conn.commit()
+    _TABLE_ENSURED = True
 
 
 def db_get(key: str) -> dict | None:
@@ -105,16 +119,28 @@ def _atomic_write(path: pathlib.Path, payload: dict) -> None:
         logger.debug("state_store cache write %s falhou: %s", path, exc)
 
 
-def load_state(key: str, file_paths: list[pathlib.Path], default: dict) -> dict:
-    """Carrega do DB; se ausente no DB, tenta arquivo e migra para o DB."""
+def load_state(
+    key: str,
+    file_paths: list[pathlib.Path],
+    default: dict,
+    cache_ttl_secs: float = _DEFAULT_CACHE_TTL_SECS,
+) -> dict:
+    """Carrega do cache em memória/DB; se ausente no DB, tenta arquivo e migra para o DB."""
+    now = time.monotonic() if "time" in globals() else 0.0
     with _STATE_LOCK:
+        if cache_ttl_secs > 0 and key in _MEM_CACHE:
+            ts, cached_val = _MEM_CACHE[key]
+            if (now - ts) < cache_ttl_secs:
+                return {**default, **cached_val}
         data = db_get(key)
         if data is not None:
+            _MEM_CACHE[key] = (now, dict(data))
             return {**default, **data}
         for p in file_paths:
             try:
                 if p.exists():
                     data = json.loads(p.read_text(encoding="utf-8"))
+                    _MEM_CACHE[key] = (now, dict(data))
                     db_set(key, data)  # migração transparente para o Neon
                     return {**default, **data}
             except Exception:
@@ -123,9 +149,22 @@ def load_state(key: str, file_paths: list[pathlib.Path], default: dict) -> dict:
 
 
 def save_state(key: str, value: dict, file_paths: list[pathlib.Path]) -> dict:
-    """Grava no DB (fonte da verdade) e nos arquivos (cache)."""
+    """Grava no DB (fonte da verdade), cache em memória e nos arquivos locais."""
+    now = time.monotonic() if "time" in globals() else 0.0
     with _STATE_LOCK:
+        _MEM_CACHE[key] = (now, dict(value))
         db_set(key, value)
         for p in file_paths:
             _atomic_write(p, value)
         return value
+
+
+def save_state_async(key: str, value: dict, file_paths: list[pathlib.Path]) -> None:
+    """Atualiza cache e arquivo local imediatamente e persiste no Postgres em background."""
+    now = time.monotonic() if "time" in globals() else 0.0
+    snapshot = dict(value)
+    with _STATE_LOCK:
+        _MEM_CACHE[key] = (now, snapshot)
+        for p in file_paths:
+            _atomic_write(p, snapshot)
+    threading.Thread(target=db_set, args=(key, snapshot), daemon=True, name=f"state-save-{key}").start()
