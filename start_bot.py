@@ -10,6 +10,8 @@ import time
 import urllib.request
 import uuid
 
+import requests
+
 # =============================================================================
 # Bootstrap Seguro de Credenciais e AppSec (Claude Fable 5.1)
 # =============================================================================
