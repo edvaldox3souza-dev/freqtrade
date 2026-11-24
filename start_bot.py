@@ -159,8 +159,8 @@ PT_BR_BUTTON_MAP = {
 WELCOME_PT_BR = (
     "🤖 *Unkiorra Trade Bot*\n\n"
     "✅ *Robô Ativo:* Monitorando oportunidades em tempo real\n"
-    "🏦 *Corretora:* KRAKEN (`Pares Spot` | `RenderQuantV4_Adaptive` `4h`)\n"
-    "🚀 *Modo:* **Conta Real** (`Kraken Spot` — Saldo Real Ativo)\n"
+    "🏦 *Corretora:* KRAKEN (`Pares Spot` | `RenderQuantV3_Defensive` `4h`)\n"
+    "🛡️ *Modo:* Simulação (`Dry-Run` — Carteira Virtual: `1000 USDT`)\n"
     "🧠 *Guardião IA:* Claude Opus 5.5 Ativo (`/ia` ou toque em 🧠 Guardião IA)\n"
     "⚡ *Proteção de Capital:* Ativa (`Mean Reversion` + `StoplossGuard` + `MaxDrawdown`)\n"
     "👻 *Telemetria:* Shadow Trading Ativo no Neon DB (`/shadow`)\n\n"
@@ -966,19 +966,22 @@ def format_estrategia_text() -> str:
 def get_welcome_message() -> str:
     try:
         ex_st = get_exchange_status()
-        is_dry = bool(ex_st.get("dry_run", False))
-        if os.environ.get("FREQTRADE__DRY_RUN", "").strip().lower() in ("false", "0", "no"):
+        is_dry = bool(ex_st.get("dry_run", True))
+        env_dry = os.environ.get("FREQTRADE__DRY_RUN", "").strip().lower()
+        if env_dry in ("false", "0", "no"):
             is_dry = False
+        elif env_dry in ("true", "1", "yes"):
+            is_dry = True
         ex_name = str(ex_st.get("exchange", "kraken")).upper()
     except Exception:
-        is_dry = False
+        is_dry = True
         ex_name = "KRAKEN"
 
     try:
         strat_st = get_strategy_state()
-        active_strat = strat_st.get("active_strategy", "RenderQuantV4_Adaptive")
+        active_strat = strat_st.get("active_strategy", "RenderQuantV3_Defensive")
     except Exception:
-        active_strat = "RenderQuantV4_Adaptive"
+        active_strat = "RenderQuantV3_Defensive"
 
     try:
         from user_data.ai_guardian import get_state as get_ai_state
@@ -1881,13 +1884,13 @@ def install_pt_br_hooks() -> None:
                 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
                 cancel_kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancelar", callback_data="unk_input:cancel")]])
                 await q.message.reply_text(
-                    "Envie agora apenas a sua *Chave de API do Claude Fable (Mirai)*.\nSua mensagem será apagada do chat imediatamente após o salvamento.",
+                    "Envie agora apenas a sua *Chave de API do AI Guardian (Claude Opus 5.5 / Mirai)*.\nSua mensagem será apagada do chat imediatamente após o salvamento.",
                     parse_mode="Markdown",
                     reply_markup=cancel_kb,
                 )
                 return
             elif sub == "test":
-                await q.answer("🧪 Testando conexão com Claude Fable 5.1...", show_alert=False)
+                await q.answer("🧪 Testando conexão com Claude Opus 5.5...", show_alert=False)
                 ok, t_msg = _ai_test()
                 await q.message.reply_text(t_msg, parse_mode="Markdown")
                 return
@@ -1990,13 +1993,22 @@ def install_pt_br_hooks() -> None:
         await update.message.reply_text(f"✅ Modo alterado para *{label}*.", parse_mode="Markdown")
 
     async def _cmd_diag(update, context):
-        """Diagnóstico em tempo real do estado do bot e subsistemas (Claude Fable 5.1)."""
+        """Diagnóstico em tempo real do estado do robô e subsistemas."""
         if not is_authorized_chat(update):
             return
         st = get_exchange_status()
-        mode_str = "Simulado (Dry-Run)" if st.get("dry_run", True) else "CONTA REAL"
+        is_dry = bool(st.get("dry_run", True))
+        env_dry = os.environ.get("FREQTRADE__DRY_RUN", "").strip().lower()
+        if env_dry in ("false", "0", "no"):
+            is_dry = False
+        elif env_dry in ("true", "1", "yes"):
+            is_dry = True
+        mode_str = "Simulado (Dry-Run)" if is_dry else "CONTA REAL"
         tok_masked = f"...{TOKEN[-5:]}" if len(TOKEN) > 5 else "NÃO CONFIGURADO"
-        stop_nativo_diag = "🟢 ATIVO no Livro da Corretora (intervalo 60s)" if st.get("stoploss_on_exchange") else "🟡 Stop Local (Monitorado pelo Bot)"
+        if is_dry:
+            stop_nativo_diag = "🟢 Ativo no Motor de Simulação (Stop Virtual 5%)"
+        else:
+            stop_nativo_diag = "🟢 ATIVO no Livro da Corretora (intervalo 60s)" if st.get("stoploss_on_exchange") else "🟡 Stop Local (Monitorado pelo Bot)"
         active_strat = "RenderQuantV3_Defensive"
         try:
             st_strat = get_strategy_state()
@@ -2010,7 +2022,7 @@ def install_pt_br_hooks() -> None:
             f"• *Chat ID Pareado:* `{CHAT_ID}`\n"
             f"• *Modo de Operação:* `{mode_str}`\n"
             f"• *Corretora:* `{st.get('exchange', 'kraken').upper()}`\n"
-            f"• *Stop-Loss na Corretora:* `{stop_nativo_diag}`\n"
+            f"• *Stop-Loss:* `{stop_nativo_diag}`\n"
             f"• *Estratégia:* `{active_strat}` (4h Mean Reversion — Validada 600d)\n"
             f"• *Watchdogs:* RAM (420MB) + Neon Anti-Sleep Ativos\n\n"
             "💡 _Seu bot está respondendo normalmente aos comandos._"
@@ -2027,6 +2039,7 @@ def install_pt_br_hooks() -> None:
         )
 
     async def _cmd_why(update, context):
+        """Diagnóstico matemático em tempo real: distância exata de cada par para a entrada da V3."""
         if not is_authorized_chat(update):
             return
         target = getattr(update, "effective_message", None) or getattr(update, "message", None)
@@ -2042,53 +2055,100 @@ def install_pt_br_hooks() -> None:
                     break
             except Exception:
                 pass
-        if not state:
+
+        if state and "pairs" in state and state["pairs"]:
+            pairs_dict = state["pairs"]
+            strat_name = state.get("strategy", "RenderQuantV3_Defensive")
+            target_bb = float(state.get("bb_pos_target", 0.05))
+            updated_ts = state.get("updated_at", "Recente")
+
+            rows = []
+            min_pos = 1.0
+            for p_name, p_data in sorted(pairs_dict.items()):
+                c = p_data.get("price", 0)
+                pos = p_data.get("bb_pos", 1.0)
+                min_pos = min(min_pos, pos)
+                status = "🔴 Topo" if pos >= 0.60 else ("🟡 Meio" if pos >= 0.25 else "🟢 Fundo")
+                dist = (pos - target_bb) * 100
+                dist_str = f"+{dist:.1f}%" if dist > 0 else f"{dist:.1f}%"
+                rows.append(f"• *{p_name}:* `${c:,.2f}` | BB: `{pos*100:.1f}%` ({status}) | Distância: `{dist_str}`")
+
+            if min_pos < target_bb:
+                diag = "🟢 *Oportunidade em andamento:* Ao menos uma moeda atingiu o fundo extremo (< 5.0%). Motor avaliando compra."
+            elif min_pos < 0.25:
+                diag = "🟡 *Retração em curso:* Moeda se aproximando do fundo. Monitorando confluência institucional."
+            else:
+                diag = "🛡️ *Mercado em zona neutra/alta:* Todos os pares transitam acima de 25% de Bollinger. A estratégia V3 aguarda retração profunda no fundo da banda (< 5.0%) para comprar com proteção de capital."
+
             msg = (
-                "🛡️ *Diagnóstico de Entrada (/why)*\n\n"
-                "• *Status:* `ATIVO / MONITORANDO KRAKEN`\n"
-                "• *Estratégia:* `RenderQuantV4_Adaptive (4h)`\n\n"
-                "🔍 *Diagnóstico:* O robô está ativo e sincronizado com a Kraken. Todos os pares monitorados estão "
-                "transitando no topo das Bandas de Bollinger (zona de sobrecompra). O motor aguarda um recuo saudável "
-                "para disparar compras institucionais.\n\n"
-                "👉 *Dica:* Toque em *🔭 Scanner Mercado* no menu para ver a posição exata de cada moeda em tempo real."
+                f"🛡️ *Diagnóstico de Entrada (/why)*\n\n"
+                f"• *Estratégia:* `{strat_name} (4h)`\n"
+                f"• *Gatilho de Compra V3:* `BB_Pos < {target_bb*100:.1f}%` (Fundo Extremo)\n"
+                f"• *Última Telemetria:* `{updated_ts}`\n\n"
+                f"📊 *Posição dos Pares em Tempo Real:*\n"
+                + "\n".join(rows) +
+                f"\n\n🔍 *Diagnóstico Matemático:*\n{diag}\n\n"
+                f"💡 _O bot opera com rigor institucional: compras só acontecem no fundo estatístico das Bandas de Bollinger._"
             )
             if target:
                 await target.reply_text(msg, parse_mode="Markdown")
             return
 
-        dec = state.get("decision", "WAITING_DIP")
-        emoji = "✅" if dec == "ENTER" else "🛡️"
-        pair = state.get("pair", "BTC/USDT")
-        reason = state.get("reason", "Aguardando confluência estrutural")
-        ts = state.get("ts", "Recente")
-        mode = state.get("mode", "RenderQuantV4_Adaptive (4h)")
+        # Fallback dinâmico: se why_state ainda não existe, calcula diretamente via Kraken OHLC
+        try:
+            import requests as _req
+            k_pairs = [
+                ("BTC/USDT", "XBTUSDT"),
+                ("ETH/USDT", "ETHUSDT"),
+                ("SOL/USDT", "SOLUSDT"),
+                ("XRP/USDT", "XRPUSDT"),
+                ("ADA/USDT", "ADAUSDT"),
+                ("LINK/USDT", "LINKUSDT"),
+            ]
+            rows = []
+            min_pos = 1.0
+            for p_name, kp in k_pairs:
+                url = f"https://api.kraken.com/0/public/OHLC?pair={kp}&interval=240"
+                r = _req.get(url, headers={"User-Agent": "Freqtrade-Unkiorra/1.0"}, timeout=4)
+                if r.status_code == 200:
+                    data = r.json().get("result", {})
+                    k = [k for k in data.keys() if k != "last"][0]
+                    closes = [float(x[4]) for x in data[k][-20:]]
+                    c = closes[-1]
+                    mid = sum(closes) / 20.0
+                    std = (sum((x - mid) ** 2 for x in closes) / 20.0) ** 0.5
+                    lo = mid - 2.0 * std
+                    hi = mid + 2.0 * std
+                    w = hi - lo if hi != lo else 1.0
+                    pos = max(-0.5, min(1.5, (c - lo) / w))
+                    min_pos = min(min_pos, pos)
+                    status = "🔴 Topo" if pos >= 0.60 else ("🟡 Meio" if pos >= 0.25 else "🟢 Fundo")
+                    dist = (pos - 0.05) * 100
+                    rows.append(f"• *{p_name}:* `${c:,.2f}` | BB: `{pos*100:.1f}%` ({status}) | Distância: `+{dist:.1f}%`")
 
-        bb_val = state.get("bb_pos")
-        bb_str = f"`{bb_val*100:.1f}%` (Alvo < 15%)" if bb_val is not None else None
-        rsi_val = state.get("rsi")
-        price_val = state.get("price")
-        price_str = f"`${price_val:,.2f}`" if price_val else None
+            if min_pos < 0.05:
+                diag = "🟢 *Oportunidade:* Ao menos uma moeda atingiu o gatilho de fundo (< 5.0%)."
+            elif min_pos < 0.25:
+                diag = "🟡 *Retração em curso:* Monitorando aproximação do fundo."
+            else:
+                diag = "🛡️ *Mercado em zona neutra/alta:* Nenhum par atingiu a zona de compra (< 5.0%). Todos os ativos estão no terço médio/superior de Bollinger. O motor aguarda retração profunda para comprar com proteção institucional."
 
-        lines = [
-            f"{emoji} *Diagnóstico de Entrada (/why)*\n",
-            f"• *Status:* `{dec}`",
-            f"• *Par Monitorado:* `{pair}`" + (f" ({price_str})" if price_str else ""),
-        ]
-        if bb_str:
-            lines.append(f"• *Posição nas Bandas (BB_Pos):* {bb_str}")
-        if rsi_val is not None:
-            lines.append(f"• *RSI (14):* `{rsi_val}`")
-        lines.extend([
-            f"• *Horário da Leitura:* `{ts}`",
-            f"• *Modo:* `{mode}`\n",
-            f"🔍 *Diagnóstico:* {reason}\n",
-            "💡 _O bot opera com rigor institucional: se o mercado estiver na metade superior de Bollinger (sobrecompra), a entrada é retida para evitar comprar no topo local._",
-        ])
-        msg = "\n".join(lines)
-        if target:
-            await target.reply_text(msg, parse_mode="Markdown")
+            msg = (
+                "🛡️ *Diagnóstico de Entrada (/why)*\n\n"
+                "• *Estratégia:* `RenderQuantV3_Defensive (4h)`\n"
+                "• *Gatilho de Compra V3:* `BB_Pos < 5.0%` (Fundo Extremo)\n\n"
+                "📊 *Posição Atual Calculada na Kraken (Tempo Real):*\n"
+                + "\n".join(rows) +
+                f"\n\n🔍 *Diagnóstico Matemático:*\n{diag}"
+            )
+            if target:
+                await target.reply_text(msg, parse_mode="Markdown")
+        except Exception as exc:
+            if target:
+                await target.reply_text(f"⚠️ *Erro ao calcular diagnóstico:* `{exc}`", parse_mode="Markdown")
 
     async def _cmd_scanner(update, context):
+        """Scanner em tempo real dos pares Spot na Kraken com gatilhos dinâmicos da V3."""
         if not is_authorized_chat(update):
             return
         target = getattr(update, "effective_message", None) or getattr(update, "message", None)
@@ -2100,7 +2160,7 @@ def install_pt_br_hooks() -> None:
             loading_msg = await target.reply_text("🔭 *Escaneando pares Kraken Spot em tempo real...*", parse_mode="Markdown")
 
         try:
-            import urllib.request, json
+            import requests as _req
             pairs = [
                 ("BTC/USDT", "XBTUSDT"),
                 ("ETH/USDT", "ETHUSDT"),
@@ -2110,11 +2170,12 @@ def install_pt_br_hooks() -> None:
                 ("LINK/USDT", "LINKUSDT"),
             ]
             rows = []
+            min_pos = 1.0
             for pair_name, kraken_pair in pairs:
                 url = f"https://api.kraken.com/0/public/OHLC?pair={kraken_pair}&interval=240"
-                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-                with urllib.request.urlopen(req, timeout=4) as resp:
-                    data = json.loads(resp.read().decode("utf-8"))["result"]
+                resp = _req.get(url, headers={"User-Agent": "Freqtrade-Unkiorra/1.0"}, timeout=4)
+                if resp.status_code == 200:
+                    data = resp.json().get("result", {})
                     key = [k for k in data.keys() if k != "last"][0]
                     raw = data[key][-25:]
                     closes = [float(x[4]) for x in raw]
@@ -2126,16 +2187,27 @@ def install_pt_br_hooks() -> None:
                     bb_hi = mid + 2.0 * std
                     w = bb_hi - bb_lo if bb_hi != bb_lo else 1.0
                     bb_pos = max(-0.5, min(1.5, (c - bb_lo) / w))
+                    min_pos = min(min_pos, bb_pos)
                     status_emoji = "🔴 Topo" if bb_pos >= 0.60 else ("🟡 Meio" if bb_pos >= 0.25 else "🟢 Fundo")
-                    rows.append(f"• *{pair_name}:* `${c:,.2f}` | BB: `{bb_pos*100:.1f}%` ({status_emoji})")
+                    dist_to_v3 = (bb_pos - 0.05) * 100
+                    dist_str = f"+{dist_to_v3:.1f}%" if dist_to_v3 > 0 else f"{dist_to_v3:.1f}%"
+                    rows.append(f"• *{pair_name}:* `${c:,.2f}` | BB: `{bb_pos*100:.1f}%` ({status_emoji}) | Distância V3: `{dist_str}`")
+
+            if min_pos < 0.05:
+                diag = "🟢 *Oportunidade:* Ao menos uma moeda atingiu o gatilho de fundo (< 5.0%). Motor avaliando compra."
+            elif min_pos < 0.25:
+                diag = "🟡 *Aproximação:* Moedas em retração intermediária. Monitorando aproximação do fundo."
+            else:
+                diag = "🛡️ *Sem risco de topo:* Todos os pares monitorados estão na metade neutra/superior da banda. Robô saudável e aguardando retração institucional profunda (< 5.0%)."
 
             scan_text = (
                 "🔭 *Scanner de Mercado em Tempo Real (Kraken Spot 4h)*\n\n"
                 + "\n".join(rows) +
-                "\n\n🎯 *Gatilhos de Compra da V4:*\n"
-                "• *Fundo (Reversão):* `BB_Pos < 15.0%`\n"
-                "• *Pullback de Tendência:* `BB_Pos <= 40.0%` + RSI < 52\n\n"
-                "💡 *Diagnóstico:* Todos os pares monitorados estão no terço superior da banda (zona de topo). O robô está saudável e aguarda uma retração para comprar no fundo com margem de segurança."
+                "\n\n🎯 *Gatilhos de Compra da V3 Defensiva:*\n"
+                "• *Fundo Extremo (Reversão):* `BB_Pos < 5.0%`\n"
+                "• *Piso Estrutural:* Preço > 92% da EMA200 (4h)\n"
+                "• *Liquidez 24h:* Volume acumulado >= $5.000.000 USD\n\n"
+                f"💡 *Diagnóstico Dinâmico:* {diag}"
             )
             if loading_msg:
                 await loading_msg.edit_text(scan_text, parse_mode="Markdown")
@@ -2379,7 +2451,7 @@ def keep_alive() -> None:
     ok_once = False
     while True:
         try:
-            urllib.request.urlopen(url + "/api/v1/ping", timeout=15).read()
+            requests.get(url + "/api/v1/ping", timeout=15)
             ok_once = True
             print("Keep-alive ping OK:", url, flush=True)
             time.sleep(KEEP_ALIVE_INTERVAL)

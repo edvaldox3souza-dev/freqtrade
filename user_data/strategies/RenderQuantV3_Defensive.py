@@ -5,7 +5,10 @@ Backtest (taxas Kraken 0.26%/lado, 6 pares, risk gates ativos):
 - Entradas: fundo da banda de Bollinger (bb_pos < 0.05) com piso estrutural EMA200
 - Saidas: regressao a media (bb_pos > 0.75 / RSI > 68), TP 1.5xATR, SL 5% (sem trailing)
 """
+import json
 import logging
+import pathlib
+import time
 from datetime import datetime
 from typing import Any
 
@@ -98,6 +101,50 @@ class RenderQuantV3_Defensive(IStrategy):
         dataframe["tp_ref"] = close * (1 + self.tp_atr_mult * dataframe["atr_pct"])
         return dataframe
 
+    def _record_telemetry(self, dataframe: DataFrame, pair: str) -> None:
+        if dataframe.empty or not pair:
+            return
+        paths = [
+            pathlib.Path("user_data/why_state.json"),
+            pathlib.Path("/freqtrade/user_data/why_state.json"),
+        ]
+        target = paths[1] if paths[1].parent.exists() else paths[0]
+        try:
+            existing = {}
+            if target.exists():
+                try:
+                    existing = json.loads(target.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    existing = {}
+            pairs_dict = existing.get("pairs", {})
+            last_row = dataframe.iloc[-1]
+            c = float(last_row.get("close", 0) or 0)
+            bb = float(last_row.get("bb_pos", 1.0) if last_row.get("bb_pos") is not None else 1.0)
+            rsi = float(last_row.get("rsi", 50.0) if last_row.get("rsi") is not None else 50.0)
+            ema = float(last_row.get("ema200", 0) if last_row.get("ema200") is not None else 0)
+            vol = float(last_row.get("vol_usd_24h", 0) if last_row.get("vol_usd_24h") is not None else 0)
+            has_sig = bool(last_row.get("enter_long", 0) == 1)
+
+            pairs_dict[pair] = {
+                "price": round(c, 4),
+                "bb_pos": round(bb, 4),
+                "rsi": round(rsi, 1),
+                "ema200": round(ema, 2),
+                "vol_24h": round(vol, 2),
+                "signal": has_sig,
+                "ts": time.strftime("%H:%M:%S UTC"),
+            }
+            data = {
+                "strategy": "RenderQuantV3_Defensive",
+                "timeframe": self.timeframe,
+                "bb_pos_target": self.bb_pos_entry,
+                "pairs": pairs_dict,
+                "updated_at": time.strftime("%H:%M:%S UTC"),
+            }
+            target.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("V3: falha na telemetria: %s", exc)
+
     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         if dataframe.empty:
             return dataframe
@@ -109,6 +156,12 @@ class RenderQuantV3_Defensive(IStrategy):
         )
         dataframe.loc[cond, "enter_long"] = 1
         dataframe.loc[cond, "enter_tag"] = "V3:defensive_mr"
+
+        try:
+            if metadata and "pair" in metadata:
+                self._record_telemetry(dataframe, str(metadata.get("pair", "")))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("V3: telemetria debug: %s", exc)
         return dataframe
 
     def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
