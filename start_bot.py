@@ -2482,12 +2482,16 @@ async def setup_telegram_menu() -> None:
         reply_markup=inline_markup,
     )
     print("PT-BR_MENU_SENT message_id=", msg.message_id, flush=True)
+    # Desfixa qualquer mensagem fixada a pedido do usuario
     try:
-        await bot.pin_chat_message(
-            chat_id=CHAT_ID, message_id=msg.message_id, disable_notification=True
-        )
+        await bot.unpin_all_chat_messages(chat_id=CHAT_ID)
+        print("PT-BR_TELEGRAM: Todas as mensagens fixadas no chat foram desfixadas com sucesso!", flush=True)
     except Exception as exc:
-        print("Pin warning:", exc, flush=True)
+        try:
+            await bot.unpin_chat_message(chat_id=CHAT_ID)
+        except Exception:
+            pass
+        print("PT-BR_TELEGRAM unpin aviso:", exc, flush=True)
 
 
 def keep_alive() -> None:
@@ -2643,7 +2647,7 @@ def main() -> None:
     time.sleep(8)
     try:
         asyncio.run(setup_telegram_menu())
-        print("Telegram PT-BR menu & pinned message configured successfully!", flush=True)
+        print("Telegram PT-BR menu configurado com sucesso (sem mensagem fixada)!", flush=True)
     except Exception as exc:
         print("Setup telegram menu error:", exc, flush=True)
     threading.Thread(target=keep_alive, daemon=True).start()
