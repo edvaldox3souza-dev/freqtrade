@@ -2746,6 +2746,22 @@ def start_shadow_sync_worker() -> None:
     print("[shadow_tracker] Worker de sincronização Neon DB ativo (120s)!", flush=True)
 
 
+def _mask_argv(argv: list[str]) -> list[str]:
+    """Mascara valores sensíveis após --db-url apenas para logs de auditoria."""
+    out: list[str] = []
+    mask_next = False
+    for item in argv:
+        if mask_next:
+            host_part = item.split("@")[-1] if "@" in item else "***"
+            out.append(f"***@{host_part}")
+            mask_next = False
+        else:
+            out.append(item)
+            if item == "--db-url":
+                mask_next = True
+    return out
+
+
 def main() -> None:
     print("[BOOT] main() iniciado!", flush=True)
     try:
@@ -2847,12 +2863,13 @@ def main() -> None:
         os.environ["FREQTRADE__DRY_RUN"] = "true" if _is_dry else "false"
         os.environ["DRY_RUN"] = "true" if _is_dry else "false"
         _db_masked = db_url.split("@")[-1] if "@" in db_url else "***"
+        _argv_masked = _mask_argv(sys.argv)
         print(
             f"PT-BR_BOOT_AUDIT: pid={os.getpid()} strategy={_cfg.get('strategy')!r} "
             f"argv_strategy={boot_strategy!r} max_open_trades={_cfg.get('max_open_trades')} "
             f"stake_currency={_cfg.get('stake_currency')} exchange={_cfg.get('exchange', {}).get('name')} "
             f"pairs={len(_cfg.get('exchange', {}).get('pair_whitelist', []))} "
-            f"argv={sys.argv} db@{_db_masked}",
+            f"argv={_argv_masked} db@{_db_masked}",
             flush=True,
         )
     except Exception as exc:

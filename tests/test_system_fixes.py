@@ -161,3 +161,18 @@ def test_comandos_telegram_bloqueiam_chat_nao_autorizado():
             asyncio.run(cmd_map[cmd_name](bad_update, MagicMock()))
             assert bad_update.message.reply_text.call_count == 0
             assert bad_update.effective_chat.send_message.call_count == 0
+
+
+def test_mask_argv_esconde_credenciais_db_url():
+    raw = [
+        "freqtrade",
+        "trade",
+        "--db-url",
+        "postgresql+psycopg2://user_secret:pass_secret_123@ep-host.neon.tech/neondb?sslmode=require",
+    ]
+    masked = start_bot._mask_argv(raw)
+    assert "pass_secret_123" not in " ".join(masked)
+    assert "user_secret" not in " ".join(masked)
+    assert "***@ep-host.neon.tech/neondb?sslmode=require" in masked
+    # Garante que a lista original (sys.argv) não foi mutada
+    assert "pass_secret_123" in raw[3]
