@@ -162,7 +162,7 @@ WELCOME_PT_BR = (
     "🤖 *Unkiorra Trade Bot*\n\n"
     "✅ *Robô Ativo:* Monitorando oportunidades em tempo real\n"
     "🏦 *Corretora:* KRAKEN (`Pares Spot` | `RenderQuantV3_Defensive` `4h`)\n"
-    "🛡️ *Modo:* Simulação (`Dry-Run` — Carteira Virtual: `1000 USDT`)\n"
+    "🚀 *Modo:* **Conta Real** (`Kraken Spot` — Saldo Real Ativo)\n"
     "🧠 *Guardião IA:* Claude Opus 5.5 Ativo (`/ia` ou toque em 🧠 Guardião IA)\n"
     "⚡ *Proteção de Capital:* Ativa (`Mean Reversion` + `StoplossGuard` + `MaxDrawdown`)\n"
     "👻 *Telemetria:* Shadow Trading Ativo no Neon DB (`/shadow`)\n\n"
@@ -654,30 +654,40 @@ def ensure_runtime_config(
                 if env_pass and ex_cfg.get("password") != env_pass:
                     ex_cfg["password"] = env_pass
                     changed = True
+                base_dry = bool(cfg.get("dry_run", False))
                 env_dry = os.environ.get("FREQTRADE__DRY_RUN", "").strip().lower() or os.environ.get("DRY_RUN", "").strip().lower()
+                target_dry = base_dry
+                try:
+                    from user_data.state_store import load_state, save_state
+                    ex_st = load_state("exchange_state", [], {})
+                    if "dry_run" in ex_st:
+                        target_dry = bool(ex_st["dry_run"]) if base_dry else False
+                    else:
+                        target_dry = base_dry
+                except Exception as exc:
+                    target_dry = base_dry
+                    print("PT-BR_BOOT_EX_STATE_WARN:", exc, flush=True)
+
                 if env_dry in ("false", "0", "no"):
-                    cfg["dry_run"] = False
-                    changed = True
-                    print("PT-BR_BOOT_DRY_RUN_OVERRIDE: false (Conta Real via ENV)", flush=True)
-                elif env_dry in ("true", "1", "yes"):
-                    cfg["dry_run"] = True
-                    changed = True
-                    print("PT-BR_BOOT_DRY_RUN_OVERRIDE: true (Simulado via ENV)", flush=True)
-                else:
-                    try:
-                        from user_data.state_store import load_state
-                        ex_st = load_state("exchange_state", [], {})
-                        if "dry_run" in ex_st:
-                            cfg["dry_run"] = bool(ex_st["dry_run"])
-                            changed = True
-                            print(f"PT-BR_BOOT_DRY_RUN_STATE: {cfg['dry_run']} (Neon DB)", flush=True)
-                    except Exception as exc:
-                        print("PT-BR_BOOT_EX_STATE_WARN:", exc, flush=True)
+                    target_dry = False
+                    print("PT-BR_BOOT_DRY_RUN_SOURCE: false (Conta Real forçada via ENV)", flush=True)
 
                 ex = cfg.get("exchange", {})
-                if not bool(cfg.get("dry_run", True)) and (not ex.get("key") or not ex.get("secret")):
-                    cfg["dry_run"] = True
-                    changed = True
+                if not target_dry and (not ex.get("key") or not ex.get("secret")):
+                    target_dry = True
+                    print("PT-BR_BOOT_DRY_RUN_SAFETY: chaves ausentes, forçando Dry-Run por proteção", flush=True)
+
+                cfg["dry_run"] = target_dry
+                changed = True
+
+                os.environ["FREQTRADE__DRY_RUN"] = "true" if target_dry else "false"
+                os.environ["DRY_RUN"] = "true" if target_dry else "false"
+                print(f"PT-BR_BOOT_DRY_RUN_FINAL: {target_dry} ({'Simulado' if target_dry else 'CONTA REAL KRAKEN SPOT LIVE'})", flush=True)
+
+                try:
+                    save_state("exchange_state", {"dry_run": target_dry, "exchange": ex_cfg.get("name", "kraken")}, [])
+                except Exception:
+                    pass
                 # FIX 2b: db_url do DATABASE_URL direto na runtime config (override P0).
                 # Garante Postgres persistente mesmo se o parsing de --db-url falhar.
                 env_db = os.environ.get("DATABASE_URL", "").strip()
@@ -867,9 +877,12 @@ def build_corretora_inline_markup():
 
 def format_corretora_text() -> str:
     st = get_exchange_status()
-    modo = "Simulação (Dry-Run)" if st["dry_run"] else "Conta Real"
+    modo = "Simulação (Dry-Run)" if st["dry_run"] else "🚀 Conta Real (Kraken Spot)"
     ts = time.strftime("%H:%M:%S")
-    stop_nativo = "🟢 ATIVO no Livro (60s)" if st.get("stoploss_on_exchange") else "🟡 Stop Local (Monitorado pelo Bot)"
+    if st["dry_run"]:
+        stop_nativo = "🟡 Motor Simulado (Dry-Run: stop gerenciado na memória)"
+    else:
+        stop_nativo = "🟢 ATIVO no Livro Kraken (Stoploss na Corretora)" if st.get("stoploss_on_exchange") else "🟡 Stop Local (Monitorado pelo Bot)"
     try:
         from user_data.ai_guardian import get_state as _ai_st
         s_ai = _ai_st()
@@ -951,17 +964,34 @@ def format_estrategia_text() -> str:
     st = get_strategy_state()
     active = st.get("active_strategy", "RenderQuantV3_Defensive")
     ts = st.get("updated_at", time.strftime("%H:%M:%S"))
-    is_v2 = (active == "RenderQuantV2_Institutional")
-    ker_min = "0.42 (Rigor Extremo)" if is_v2 else "0.35 (Equilibrado)"
+    if "V3" in active:
+        gatilhos = (
+            "• *Timeframe:* `4h`\n"
+            "• *Gatilho Reversão:* `BB_Pos < 5.0%` (Fundo Extremo Bollinger)\n"
+            "• *Piso Estrutural Institucional:* `Preço >= 92% da EMA200 (4h)`\n"
+            "• *Filtro de Liquidez 24h:* `Volume >= $5.000.000 USDT`\n"
+            "• *Stop-Loss & Lucro (ROI):* `Stop: -5.0%` | `ROI: +10.0%`"
+        )
+    elif "V4" in active:
+        gatilhos = (
+            "• *Timeframe:* `4h`\n"
+            "• *Gatilho Adaptativo:* `BB_Pos < 15.0%` + Rejeição de Pavio (Wick)\n"
+            "• *Macro Guard:* `BTC acima da EMA200 (4h)`\n"
+            "• *Gestão de Posição:* Trailing Breakeven dinâmico"
+        )
+    else:
+        gatilhos = (
+            "• *Timeframe:* `15m`\n"
+            "• *Gatilho:* `Dual Bullish EMA9 > EMA21` + `MACD > Signal`\n"
+            "• *Filtro de Ruído:* `KER Kaufman >= 0.35`"
+        )
     return (
         f"🎯 *Seleção de Estratégia & Gestão Quantitativa*\n\n"
         f"• *Estratégia ativa no momento:* `{active}`\n"
         f"• *Última alteração:* `{ts}`\n"
-        f"• *Filtro KER (Kaufman Anti-Ruído):* `{ker_min}`\n"
-        f"• *Teto de Risco (Portfolio Heat):* `Máx 3.00% da Banca`\n"
-        f"• *Circuit Breaker Diário:* `-2.50% de Drawdown`\n\n"
+        f"{gatilhos}\n\n"
         f"👇 *Toque em uma das opções abaixo para alternar:* \n"
-        f"_(A comutação é feita em tempo real e preserva trades já abertos com trailing dedicado)_"
+        f"_(Ao alternar, a preferência é gravada no Neon DB e o motor reinicia com segurança em 2s para carregar a nova estratégia)_"
     )
 
 
@@ -969,11 +999,6 @@ def get_welcome_message() -> str:
     try:
         ex_st = get_exchange_status()
         is_dry = bool(ex_st.get("dry_run", True))
-        env_dry = os.environ.get("FREQTRADE__DRY_RUN", "").strip().lower()
-        if env_dry in ("false", "0", "no"):
-            is_dry = False
-        elif env_dry in ("true", "1", "yes"):
-            is_dry = True
         ex_name = str(ex_st.get("exchange", "kraken")).upper()
     except Exception:
         is_dry = True
@@ -1136,11 +1161,20 @@ def build_web_pt_br_script() -> str:
         "  if(!document.body||document.getElementById('unk-cockpit-hud'))return;"
         "  const h=document.createElement('div');h.id='unk-cockpit-hud';"
         "  h.style.cssText='position:fixed;top:0;left:0;right:0;height:36px;z-index:99998;background:linear-gradient(90deg,#0a0f1d,#0f172a);border-bottom:1px solid #14b8a6;display:flex;align-items:center;justify-content:space-between;padding:0 16px;font-family:sans-serif;font-size:12px;color:#f8fafc;box-shadow:0 2px 10px rgba(0,0,0,0.5);';"
-        "  h.innerHTML='<div style=\"display:flex;align-items:center;gap:16px;\"><span style=\"color:#2dd4bf;font-weight:bold;\">⚡ UNKIORRA QUANT COCKPIT</span><span>Modo: <strong id=\"unk-hud-strat-label\" style=\"color:#38bdf8;\">RenderQuantV4_Adaptive</strong></span><span>Risco: <strong style=\"color:#4ade80;\">Heat &le; 3.0%</strong></span><span>Circuit Breaker: <strong style=\"color:#4ade80;\">🟢 ARMADO</strong></span></div><div style=\"display:flex;align-items:center;gap:12px;\"><button id=\"unk-hud-shadow-btn\" style=\"background:#7c3aed;color:#fff;border:none;padding:3px 10px;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;\">👻 Shadow Trading</button><button id=\"unk-hud-strat-btn\" style=\"background:#2563eb;color:#fff;border:none;padding:3px 10px;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;\">🎯 Mudar Estratégia</button><span style=\"background:#0f766e;color:#fff;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;\">LIVE SAFEGUARD</span></div>';"
+        "  h.innerHTML='<div style=\"display:flex;align-items:center;gap:16px;\"><span style=\"color:#2dd4bf;font-weight:bold;\">⚡ UNKIORRA QUANT COCKPIT</span><span>Estratégia: <strong id=\"unk-hud-strat-label\" style=\"color:#38bdf8;\">RenderQuantV3_Defensive</strong></span><span>Status: <strong id=\"unk-hud-mode-label\" style=\"color:#4ade80;\">CONTA REAL (LIVE)</strong></span></div><div style=\"display:flex;align-items:center;gap:12px;\"><button id=\"unk-hud-shadow-btn\" style=\"background:#7c3aed;color:#fff;border:none;padding:3px 10px;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;\">👻 Shadow Trading</button><button id=\"unk-hud-strat-btn\" style=\"background:#2563eb;color:#fff;border:none;padding:3px 10px;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;\">🎯 Mudar Estratégia</button><button id=\"unk-hud-ex-btn\" style=\"background:#0f766e;color:#fff;border:none;padding:3px 10px;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;\">🏦 Corretora</button></div>';"
         "  document.body.prepend(h);"
         "  document.body.style.paddingTop='36px';"
         "  const b=document.getElementById('unk-hud-strat-btn');if(b)b.onclick=()=>{if(window.openStratModal)window.openStratModal();};"
         "  const sb=document.getElementById('unk-hud-shadow-btn');if(sb)sb.onclick=()=>{if(window.openShadowModal)window.openShadowModal();};"
+        "  const eb=document.getElementById('unk-hud-ex-btn');if(eb)eb.onclick=()=>{const mb=document.getElementById('unk-ex-btn');if(mb)mb.click();};"
+        "  (async()=>{"
+        "    try{"
+        "      const auth=getSessionAuth();if(!auth)return;"
+        "      const [rs,re]=await Promise.all([fetch('/api/v1/unkiorra/strategy',{headers:{Authorization:auth}}),fetch('/api/v1/unkiorra/exchange',{headers:{Authorization:auth}})]);"
+        "      if(rs.ok){const ds=await rs.json();const sl=document.getElementById('unk-hud-strat-label');if(sl&&ds.active_strategy)sl.textContent=ds.active_strategy;}"
+        "      if(re.ok){const de=await re.json();const ml=document.getElementById('unk-hud-mode-label');if(ml){if(de.dry_run){ml.textContent='SIMULADO (DRY-RUN)';ml.style.color='#f59e0b';}else{ml.textContent='CONTA REAL (KRAKEN LIVE)';ml.style.color='#4ade80';}}}"
+        "    }catch(e){}"
+        "  })();"
         "}"
         "function mountStratModal(){"
         "  if(!document.body||document.getElementById('unk-strat-btn'))return;"
@@ -1369,12 +1403,12 @@ def install_web_pt_br_hooks() -> None:
             if strat_name not in valid_names:
                 raise HTTPException(status_code=400, detail=f"Estratégia inválida. Escolha entre: {', '.join(valid_names)}")
             st = update_strategy_state(strat_name)
-            _reload_freqtrade_rpc()
+            threading.Timer(2.0, lambda: os._exit(0)).start()
             return {
                 "status": "success",
                 "active_strategy": st.get("active_strategy"),
                 "updated_at": st.get("updated_at"),
-                "message": f"Estratégia alterada com sucesso para {strat_name}!",
+                "message": f"Estratégia alterada com sucesso para {strat_name}! Reiniciando motor em 2s para aplicar...",
             }
 
         async def _unkiorra_get_ex_handler(request: Request):
@@ -1395,7 +1429,7 @@ def install_web_pt_br_hooks() -> None:
                 passphrase=body.get("password") or body.get("passphrase"),
                 dry_run=body.get("dry_run"),
             )
-            _reload_freqtrade_rpc()
+            threading.Timer(2.0, lambda: os._exit(0)).start()
             return res
 
         async def _unkiorra_get_shadow_handler(request: Request):
@@ -1836,20 +1870,26 @@ def install_pt_br_hooks() -> None:
                 await q.message.reply_text(f"⚠️ {err}")
                 return
             update_exchange_config(exchange_name=ex_name)
-            if tg and hasattr(tg, "_reload_config"):
-                try:
-                    await tg._reload_config(update, context)
-                except Exception:
-                    pass
+            await q.message.reply_text(
+                f"🏦 *Corretora alterada para `{ex_name.upper()}`!*\n\n"
+                f"💾 Gravada no Neon DB.\n"
+                f"🔄 Reiniciando o motor em 2s para conectar à nova corretora...",
+                parse_mode="Markdown",
+            )
+            threading.Timer(2.0, lambda: os._exit(0)).start()
+            return
         elif data.startswith("unk_strat:"):
             if data != "unk_strat:refresh":
                 strat_name = data.split(":", 1)[1]
                 st = update_strategy_state(strat_name)
-                if tg and hasattr(tg, "_reload_config"):
-                    try:
-                        await tg._reload_config(update, context)
-                    except Exception:
-                        pass
+                await q.message.reply_text(
+                    f"🎯 *Estratégia alterada para `{strat_name}`!*\n\n"
+                    f"💾 Gravada no Neon DB com sucesso.\n"
+                    f"🔄 Reiniciando o motor Freqtrade em 2s para carregar os parâmetros da nova estratégia...",
+                    parse_mode="Markdown",
+                )
+                threading.Timer(2.0, lambda: os._exit(0)).start()
+                return
             try:
                 await q.edit_message_text(
                     format_estrategia_text(),
@@ -1922,16 +1962,20 @@ def install_pt_br_hooks() -> None:
             return
         elif data.startswith("unk_mode:"):
             dry = data.endswith(":dry")
+            label = "Simulação (Dry-Run)" if dry else "Conta Real"
             try:
                 update_exchange_config(dry_run=dry)
             except ValueError as exc:
                 await q.message.reply_text(f"❌ {exc}")
                 return
-            if tg and hasattr(tg, "_reload_config"):
-                try:
-                    await tg._reload_config(update, context)
-                except Exception:
-                    pass
+            await q.message.reply_text(
+                f"🚀 *Modo alterado para `{label}`!*\n\n"
+                f"💾 Preferência gravada no Neon DB.\n"
+                f"🔄 Reiniciando o motor Freqtrade em 2s para conectar na Kraken em *{label}*...",
+                parse_mode="Markdown",
+            )
+            threading.Timer(2.0, lambda: os._exit(0)).start()
+            return
         try:
             await q.edit_message_text(
                 format_corretora_text(),
@@ -1950,10 +1994,12 @@ def install_pt_br_hooks() -> None:
             return
         try:
             st = update_exchange_config(exchange_name=args[0])
-            tg = tg_ref.get("self")
-            if tg and hasattr(tg, "_reload_config"):
-                await tg._reload_config(update, context)
-            await update.message.reply_text(f"✅ Corretora alterada para `{st['exchange']}`!", parse_mode="Markdown")
+            await update.message.reply_text(
+                f"✅ Corretora alterada para `{st['exchange']}` no Neon DB!\n\n"
+                f"🔄 Reiniciando motor em 2s para conectar à nova corretora...",
+                parse_mode="Markdown",
+            )
+            threading.Timer(2.0, lambda: os._exit(0)).start()
         except Exception as exc:
             await update.message.reply_text(f"❌ Erro: {exc}")
 
@@ -1973,26 +2019,28 @@ def install_pt_br_hooks() -> None:
             api_secret=args[1],
             passphrase=args[2] if len(args) > 2 else None,
         )
-        tg = tg_ref.get("self")
-        if tg and hasattr(tg, "_reload_config"):
-            try:
-                await tg._reload_config(update, context)
-            except Exception:
-                pass
         await update.effective_chat.send_message(
-            f"🔐 Chaves atualizadas (`{st['key_masked']}`) para `{st['exchange']}` e mensagem original apagada.",
+            f"🔐 Chaves atualizadas (`{st['key_masked']}`) para `{st['exchange']}` no Neon DB!\n"
+            f"🔄 Reiniciando motor em 2s para autenticar com as novas chaves...",
             parse_mode="Markdown",
         )
-
+        threading.Timer(2.0, lambda: os._exit(0)).start()
     async def _cmd_modo(update, context, dry: bool):
         if not is_authorized_chat(update):
             return
-        st = update_exchange_config(dry_run=dry)
-        tg = tg_ref.get("self")
-        if tg and hasattr(tg, "_reload_config"):
-            await tg._reload_config(update, context)
-        label = "Simulação (Dry-Run)" if st["dry_run"] else "Conta Real"
-        await update.message.reply_text(f"✅ Modo alterado para *{label}*.", parse_mode="Markdown")
+        label = "Simulação (Dry-Run)" if dry else "Conta Real"
+        try:
+            st = update_exchange_config(dry_run=dry)
+        except ValueError as exc:
+            await update.message.reply_text(f"❌ {exc}", parse_mode="Markdown")
+            return
+        await update.message.reply_text(
+            f"✅ Modo alterado para *{label}*!\n\n"
+            f"💾 Gravado no Neon DB com sucesso.\n"
+            f"🔄 Reiniciando motor em 2s para conectar na Kraken em *{label}*...",
+            parse_mode="Markdown",
+        )
+        threading.Timer(2.0, lambda: os._exit(0)).start()
 
     async def _cmd_diag(update, context):
         """Diagnóstico em tempo real do estado do robô e subsistemas."""
@@ -2000,17 +2048,12 @@ def install_pt_br_hooks() -> None:
             return
         st = get_exchange_status()
         is_dry = bool(st.get("dry_run", True))
-        env_dry = os.environ.get("FREQTRADE__DRY_RUN", "").strip().lower()
-        if env_dry in ("false", "0", "no"):
-            is_dry = False
-        elif env_dry in ("true", "1", "yes"):
-            is_dry = True
-        mode_str = "Simulado (Dry-Run)" if is_dry else "CONTA REAL"
+        mode_str = "Simulado (Dry-Run)" if is_dry else "🚀 CONTA REAL (Kraken Spot LIVE)"
         tok_masked = f"...{TOKEN[-5:]}" if len(TOKEN) > 5 else "NÃO CONFIGURADO"
         if is_dry:
-            stop_nativo_diag = "🟢 Ativo no Motor de Simulação (Stop Virtual 5%)"
+            stop_nativo_diag = "🟡 Ativo no Motor de Simulação (Stop Virtual 5%)"
         else:
-            stop_nativo_diag = "🟢 ATIVO no Livro da Corretora (intervalo 60s)" if st.get("stoploss_on_exchange") else "🟡 Stop Local (Monitorado pelo Bot)"
+            stop_nativo_diag = "🟢 ATIVO no Livro Kraken (Stoploss na Corretora)" if st.get("stoploss_on_exchange") else "🟡 Stop Local (Monitorado pelo Bot)"
         active_strat = "RenderQuantV3_Defensive"
         try:
             st_strat = get_strategy_state()
@@ -2677,6 +2720,9 @@ def main() -> None:
     # Se a estratégia divergir daqui para frente, a causa é pós-argv (reload interno).
     try:
         _cfg = json.loads(RUNTIME_CONFIG_PATH.read_text(encoding="utf-8")) if RUNTIME_CONFIG_PATH.exists() else {}
+        _is_dry = bool(_cfg.get("dry_run", True))
+        os.environ["FREQTRADE__DRY_RUN"] = "true" if _is_dry else "false"
+        os.environ["DRY_RUN"] = "true" if _is_dry else "false"
         _db_masked = db_url.split("@")[-1] if "@" in db_url else "***"
         print(
             f"PT-BR_BOOT_AUDIT: pid={os.getpid()} strategy={_cfg.get('strategy')!r} "
