@@ -2730,9 +2730,15 @@ def start_shadow_sync_worker() -> None:
 
 
 def main() -> None:
-    assert "Modo Simulação" in translate_pt_br("Dry run is enabled. All trades are simulated.")
-    print("PT-BR_SELF_TEST_OK: All translations verified in container!", flush=True)
+    print("[BOOT] main() iniciado!", flush=True)
+    try:
+        test_str = translate_pt_br("Dry run is enabled. All trades are simulated.")
+        assert "Modo Simulação" in test_str, f"Translation check failed: {test_str}"
+        print("PT-BR_SELF_TEST_OK: All translations verified in container!", flush=True)
+    except Exception as e:
+        print(f"[BOOT_WARN] Translation test falhou: {e}", flush=True)
     time.sleep(8)
+    print("[BOOT] Fase 1: Configurando Telegram menu...", flush=True)
     try:
         asyncio.run(setup_telegram_menu())
         print("Telegram PT-BR menu configurado com sucesso (sem mensagem fixada)!", flush=True)
@@ -2834,6 +2840,9 @@ def main() -> None:
         )
     except Exception as exc:
         print("PT-BR_BOOT_AUDIT_WARN:", exc, flush=True)
+    print("[BOOT] CHAMANDO ft_main() agora...", flush=True)
+    sys.stdout.flush()
+    sys.stderr.flush()
     ft_main()
 
 
