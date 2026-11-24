@@ -11,6 +11,8 @@ secrets/
 *.sqlite-*
 *.db
 user_data/why_state.json
+user_data/strategy_state.json
+user_data/exchange_state.json
 user_data/data/
 user_data/logs/
 user_data/backtest_results/

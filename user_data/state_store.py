@@ -46,8 +46,10 @@ def _ensure_table(conn) -> None:
 
 
 def db_get(key: str) -> dict | None:
+    conn = None
     try:
-        with _connect() as conn:
+        conn = _connect()
+        with conn:
             _ensure_table(conn)
             with conn.cursor() as cur:
                 cur.execute("SELECT value FROM bot_state WHERE key = %s", (key,))
@@ -56,11 +58,19 @@ def db_get(key: str) -> dict | None:
     except Exception as exc:
         logger.debug("state_store db_get(%s) indisponível: %s", key, exc)
         return None
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def db_set(key: str, value: dict) -> None:
+    conn = None
     try:
-        with _connect() as conn:
+        conn = _connect()
+        with conn:
             _ensure_table(conn)
             with conn.cursor() as cur:
                 cur.execute(
@@ -68,9 +78,14 @@ def db_set(key: str, value: dict) -> None:
                     "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
                     (key, json.dumps(value, ensure_ascii=False)),
                 )
-        conn.commit()
     except Exception as exc:
         logger.warning("state_store db_set(%s) falhou (mantendo cache local): %s", key, exc)
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def _atomic_write(path: pathlib.Path, payload: dict) -> None:

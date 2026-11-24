@@ -638,22 +638,25 @@ def ensure_runtime_config(
                     cfg["strategy_path"] = "/freqtrade/user_data/strategies"
                     changed = True
                     print("PT-BR_BOOT_STRATEGY_PATH_FORCE: /freqtrade/user_data/strategies", flush=True)
-                # FIX 1b: env var FREQTRADE_STRATEGY tem prioridade absoluta (override P0).
-                env_strategy = os.environ.get("FREQTRADE_STRATEGY", "").strip()
-                if env_strategy and cfg.get("strategy") != env_strategy:
-                    cfg["strategy"] = env_strategy
-                    changed = True
-                    print(f"PT-BR_BOOT_STRATEGY_ENV_OVERRIDE: {env_strategy}", flush=True)
-                elif not cfg.get("strategy"):
+                # FIX 1b: Preferência gravada no Neon DB / cache tem autoridade suprema sobre env var estática.
+                force_override = os.environ.get("FORCE_STRATEGY_OVERRIDE", "").strip()
+                resolved_strat = ""
+                if force_override:
+                    resolved_strat = force_override
+                    print(f"PT-BR_BOOT_STRATEGY_FORCE_OVERRIDE: {resolved_strat}", flush=True)
+                else:
                     try:
                         st = get_strategy_state()
-                        active = st.get("active_strategy", "RenderQuantV3_Defensive")
-                        if active:
-                            cfg["strategy"] = active
-                            changed = True
-                            print(f"PT-BR_BOOT_STRATEGY_FORCE: {active}", flush=True)
+                        resolved_strat = st.get("active_strategy", "").strip()
                     except Exception as exc:
                         print("PT-BR_BOOT_STRATEGY_WARN:", exc, flush=True)
+                    if not resolved_strat:
+                        resolved_strat = os.environ.get("FREQTRADE_STRATEGY", "").strip() or "RenderQuantV3_Defensive"
+
+                if resolved_strat and cfg.get("strategy") != resolved_strat:
+                    cfg["strategy"] = resolved_strat
+                    changed = True
+                    print(f"PT-BR_BOOT_STRATEGY_APPLIED: {resolved_strat}", flush=True)
                 # FIX 2: chaves da corretora via env vars (persistentes na Render,
                 # sobrevivem a sleep/redeploy). Env tem prioridade sobre /tmp.
                 env_key = (
@@ -928,7 +931,12 @@ def format_corretora_text() -> str:
     )
 
 
-STRATEGY_STATE_PATH = pathlib.Path("/freqtrade/user_data/strategy_state.json")
+STRATEGY_STATE_PATHS = [
+    pathlib.Path("/tmp/strategy_state.json"),
+    pathlib.Path("/freqtrade/user_data/strategy_state.json"),
+    pathlib.Path("user_data/strategy_state.json"),
+]
+STRATEGY_STATE_PATH = STRATEGY_STATE_PATHS[0]
 AVAILABLE_STRATEGIES = [
     ("RenderQuantV1", "🛡️ RenderQuant V1 (Equilibrada 15m)"),
     ("RenderQuantV2_Institutional", "🏛️ RenderQuant V2 (Institucional 15m)"),
@@ -940,10 +948,12 @@ AVAILABLE_STRATEGIES = [
 def get_strategy_state() -> dict:
     from user_data.state_store import load_state
     default = {
-        "active_strategy": os.environ.get("FREQTRADE_STRATEGY", "RenderQuantV3_Defensive"),
+        "active_strategy": "RenderQuantV3_Defensive",
         "updated_at": time.strftime("%H:%M:%S UTC"),
     }
-    data = load_state("strategy_state", [STRATEGY_STATE_PATH], default)
+    # Sempre inclui STRATEGY_STATE_PATH caso tenha sido mockado em testes
+    paths = [STRATEGY_STATE_PATH] + [p for p in STRATEGY_STATE_PATHS if p != STRATEGY_STATE_PATH]
+    data = load_state("strategy_state", paths, default)
     valid_names = {name for name, _ in AVAILABLE_STRATEGIES}
     if data.get("active_strategy") not in valid_names:
         data["active_strategy"] = default["active_strategy"]
@@ -957,7 +967,8 @@ def update_strategy_state(strat_name: str) -> dict:
         state["updated_at"] = time.strftime("%H:%M:%S UTC")
         try:
             from user_data.state_store import save_state
-            save_state("strategy_state", state, [STRATEGY_STATE_PATH])
+            paths = [STRATEGY_STATE_PATH] + [p for p in STRATEGY_STATE_PATHS if p != STRATEGY_STATE_PATH]
+            save_state("strategy_state", state, paths)
         except Exception as exc:
             print("PT-BR_STRATEGY_STATE_WARN:", exc, flush=True)
 
@@ -2753,14 +2764,21 @@ def main() -> None:
     # O mecanismo nativo FREQTRADE__* do freqtrade (EnvironmentVariables) tem a
     # maior precedência comprovada em produção (log: "Loading variable
     # 'FREQTRADE__STRATEGY'"). Env vars nativas dispensam argv por completo.
-    try:
-        boot_strategy = os.environ.get("FREQTRADE_STRATEGY", "").strip() or get_strategy_state().get("active_strategy", "RenderQuantV3_Defensive")
-    except Exception:
-        boot_strategy = "RenderQuantV3_Defensive"
+    force_override = os.environ.get("FORCE_STRATEGY_OVERRIDE", "").strip()
+    if force_override:
+        boot_strategy = force_override
+        print(f"PT-BR_BOOT_STRATEGY_FORCE_OVERRIDE: {boot_strategy}", flush=True)
+    else:
+        try:
+            boot_strategy = get_strategy_state().get("active_strategy", "").strip()
+        except Exception:
+            boot_strategy = ""
+        if not boot_strategy:
+            boot_strategy = os.environ.get("FREQTRADE_STRATEGY", "").strip() or "RenderQuantV3_Defensive"
     os.environ["FREQTRADE__STRATEGY"] = boot_strategy
     if db_url:
         os.environ["FREQTRADE__DB_URL"] = db_url
-    print("PT-BR_BOOT_STRATEGY_ARGV:", boot_strategy, flush=True)
+    print("PT-BR_BOOT_STRATEGY_RESOLVED:", boot_strategy, flush=True)
     # Config mínima: freqtrade lê user_data_dir, strategy, db_url e todos os
     # overrides das env vars nativas FREQTRADE__* (comprovadas nos logs).
     sys.argv = [

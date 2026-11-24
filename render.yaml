@@ -27,4 +27,4 @@ services:
       - key: AI_GUARDIAN_API_KEY
         sync: false
       - key: FREQTRADE_STRATEGY
-        value: RenderQuantV3_Defensive
+        sync: false
