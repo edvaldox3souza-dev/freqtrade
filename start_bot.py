@@ -967,10 +967,10 @@ def format_estrategia_text() -> str:
     if "V3" in active:
         gatilhos = (
             "• *Timeframe:* `4h`\n"
-            "• *Gatilho Reversão:* `BB_Pos < 5.0%` (Fundo Extremo Bollinger)\n"
-            "• *Piso Estrutural Institucional:* `Preço >= 92% da EMA200 (4h)`\n"
-            "• *Filtro de Liquidez 24h:* `Volume >= $5.000.000 USDT`\n"
-            "• *Stop-Loss & Lucro (ROI):* `Stop: -5.0%` | `ROI: +10.0%`"
+            "• *Gatilho Reversão:* `BB_Pos < 12.0%` (Fundo de Sobrevenda Bollinger)\n"
+            "• *Piso Estrutural Institucional:* `Preço >= 82% da EMA200 (4h)`\n"
+            "• *Filtro de Liquidez 24h:* `Volume >= $300.000 USDT`\n"
+            "• *Stop-Loss & Proteção:* `Stop: -5.0%` | `Breakeven em +2.5%` | `ROI: +10.0%`"
         )
     elif "V4" in active:
         gatilhos = (
@@ -2104,7 +2104,7 @@ def install_pt_br_hooks() -> None:
         if state and "pairs" in state and state["pairs"]:
             pairs_dict = state["pairs"]
             strat_name = state.get("strategy", "RenderQuantV3_Defensive")
-            target_bb = float(state.get("bb_pos_target", 0.05))
+            target_bb = float(state.get("bb_pos_target", 0.12))
             updated_ts = state.get("updated_at", "Recente")
 
             rows = []
@@ -2119,16 +2119,16 @@ def install_pt_br_hooks() -> None:
                 rows.append(f"• *{p_name}:* `${c:,.2f}` | BB: `{pos*100:.1f}%` ({status}) | Distância: `{dist_str}`")
 
             if min_pos < target_bb:
-                diag = "🟢 *Oportunidade em andamento:* Ao menos uma moeda atingiu o fundo extremo (< 5.0%). Motor avaliando compra."
+                diag = f"🟢 *Oportunidade em andamento:* Ao menos uma moeda atingiu a sobrevenda (< {target_bb*100:.1f}%). Motor avaliando compra."
             elif min_pos < 0.25:
                 diag = "🟡 *Retração em curso:* Moeda se aproximando do fundo. Monitorando confluência institucional."
             else:
-                diag = "🛡️ *Mercado em zona neutra/alta:* Todos os pares transitam acima de 25% de Bollinger. A estratégia V3 aguarda retração profunda no fundo da banda (< 5.0%) para comprar com proteção de capital."
+                diag = f"🛡️ *Mercado em zona neutra/alta:* Todos os pares transitam acima de 25% de Bollinger. A estratégia V3 aguarda retração na zona de compra (< {target_bb*100:.1f}%) para comprar com proteção de capital."
 
             msg = (
                 f"🛡️ *Diagnóstico de Entrada (/why)*\n\n"
                 f"• *Estratégia:* `{strat_name} (4h)`\n"
-                f"• *Gatilho de Compra V3:* `BB_Pos < {target_bb*100:.1f}%` (Fundo Extremo)\n"
+                f"• *Gatilho de Compra V3:* `BB_Pos < {target_bb*100:.1f}%` (Fundo de Sobrevenda)\n"
                 f"• *Última Telemetria:* `{updated_ts}`\n\n"
                 f"📊 *Posição dos Pares em Tempo Real:*\n"
                 + "\n".join(rows) +
@@ -2168,20 +2168,20 @@ def install_pt_br_hooks() -> None:
                     pos = max(-0.5, min(1.5, (c - lo) / w))
                     min_pos = min(min_pos, pos)
                     status = "🔴 Topo" if pos >= 0.60 else ("🟡 Meio" if pos >= 0.25 else "🟢 Fundo")
-                    dist = (pos - 0.05) * 100
+                    dist = (pos - 0.12) * 100
                     rows.append(f"• *{p_name}:* `${c:,.2f}` | BB: `{pos*100:.1f}%` ({status}) | Distância: `+{dist:.1f}%`")
 
-            if min_pos < 0.05:
-                diag = "🟢 *Oportunidade:* Ao menos uma moeda atingiu o gatilho de fundo (< 5.0%)."
+            if min_pos < 0.12:
+                diag = "🟢 *Oportunidade:* Ao menos uma moeda atingiu o gatilho de fundo (< 12.0%)."
             elif min_pos < 0.25:
                 diag = "🟡 *Retração em curso:* Monitorando aproximação do fundo."
             else:
-                diag = "🛡️ *Mercado em zona neutra/alta:* Nenhum par atingiu a zona de compra (< 5.0%). Todos os ativos estão no terço médio/superior de Bollinger. O motor aguarda retração profunda para comprar com proteção institucional."
+                diag = "🛡️ *Mercado em zona neutra/alta:* Nenhum par atingiu a zona de compra (< 12.0%). Todos os ativos estão no terço médio/superior de Bollinger. O motor aguarda retração na zona de compra para entrar com proteção institucional."
 
             msg = (
                 "🛡️ *Diagnóstico de Entrada (/why)*\n\n"
                 "• *Estratégia:* `RenderQuantV3_Defensive (4h)`\n"
-                "• *Gatilho de Compra V3:* `BB_Pos < 5.0%` (Fundo Extremo)\n\n"
+                "• *Gatilho de Compra V3:* `BB_Pos < 12.0%` (Fundo de Sobrevenda)\n\n"
                 "📊 *Posição Atual Calculada na Kraken (Tempo Real):*\n"
                 + "\n".join(rows) +
                 f"\n\n🔍 *Diagnóstico Matemático:*\n{diag}"
@@ -2234,24 +2234,24 @@ def install_pt_br_hooks() -> None:
                     bb_pos = max(-0.5, min(1.5, (c - bb_lo) / w))
                     min_pos = min(min_pos, bb_pos)
                     status_emoji = "🔴 Topo" if bb_pos >= 0.60 else ("🟡 Meio" if bb_pos >= 0.25 else "🟢 Fundo")
-                    dist_to_v3 = (bb_pos - 0.05) * 100
+                    dist_to_v3 = (bb_pos - 0.12) * 100
                     dist_str = f"+{dist_to_v3:.1f}%" if dist_to_v3 > 0 else f"{dist_to_v3:.1f}%"
                     rows.append(f"• *{pair_name}:* `${c:,.2f}` | BB: `{bb_pos*100:.1f}%` ({status_emoji}) | Distância V3: `{dist_str}`")
 
-            if min_pos < 0.05:
-                diag = "🟢 *Oportunidade:* Ao menos uma moeda atingiu o gatilho de fundo (< 5.0%). Motor avaliando compra."
+            if min_pos < 0.12:
+                diag = "🟢 *Oportunidade:* Ao menos uma moeda atingiu o gatilho de fundo (< 12.0%). Motor avaliando compra."
             elif min_pos < 0.25:
                 diag = "🟡 *Aproximação:* Moedas em retração intermediária. Monitorando aproximação do fundo."
             else:
-                diag = "🛡️ *Sem risco de topo:* Todos os pares monitorados estão na metade neutra/superior da banda. Robô saudável e aguardando retração institucional profunda (< 5.0%)."
+                diag = "🛡️ *Sem risco de topo:* Todos os pares monitorados estão na metade neutra/superior da banda. Robô saudável e aguardando retração na zona de compra (< 12.0%)."
 
             scan_text = (
                 "🔭 *Scanner de Mercado em Tempo Real (Kraken Spot 4h)*\n\n"
                 + "\n".join(rows) +
-                "\n\n🎯 *Gatilhos de Compra da V3 Defensiva:*\n"
-                "• *Fundo Extremo (Reversão):* `BB_Pos < 5.0%`\n"
-                "• *Piso Estrutural:* Preço > 92% da EMA200 (4h)\n"
-                "• *Liquidez 24h:* Volume acumulado >= $5.000.000 USD\n\n"
+                "\n\n🎯 *Gatilhos de Compra da V3 Calibrada:*\n"
+                "• *Fundo de Sobrevenda (Reversão):* `BB_Pos < 12.0%`\n"
+                "• *Piso Estrutural:* Preço > 82% da EMA200 (4h)\n"
+                "• *Liquidez 24h:* Volume acumulado >= $300.000 USDT\n\n"
                 f"💡 *Diagnóstico Dinâmico:* {diag}"
             )
             if loading_msg:

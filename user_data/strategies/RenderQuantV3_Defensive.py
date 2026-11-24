@@ -25,11 +25,11 @@ class RenderQuantV3_Defensive(IStrategy):
     INTERFACE_VERSION = 3
     timeframe: str = "4h"
     startup_candle_count: int = 220
-    process_only_new_candles: bool = True
+    process_only_new_candles: bool = False
     can_short: bool = False
 
     stoploss: float = -0.05
-    use_custom_stoploss: bool = False
+    use_custom_stoploss: bool = True
     minimal_roi = {"0": 0.10}  # noqa: RUF012  # TP principal e o sinal de regressao; ROI e rede de seguranca
 
     order_types = {  # noqa: RUF012
@@ -72,12 +72,12 @@ class RenderQuantV3_Defensive(IStrategy):
             },
         ]
 
-    # Parametros do backtest vencedor
-    bb_pos_entry: float = 0.05      # so compra no fundo da banda inferior
-    ema200_floor: float = 0.92      # piso estrutural: nunca comprar abaixo de 92% da EMA200
-    bb_pos_exit: float = 0.75       # sai na regressao a media
+    # Parametros Calibrados para Kraken Spot USDT (Liquidez Real e Repique de Sobrevenda)
+    bb_pos_entry: float = 0.12          # Fundo de sobrevenda da banda inferior (0 a 12%)
+    ema200_floor: float = 0.82          # Piso estrutural: compras em repique de ate 18% abaixo da EMA200
+    bb_pos_exit: float = 0.75           # Sai na regressao a media
     rsi_exit: int = 68
-    min_vol_usd_24h: float = 5_000_000.0
+    min_vol_usd_24h: float = 300_000.0  # Volume minimo $300k calibrado para liquidez real USDT na Kraken
     tp_atr_mult: float = 1.5
 
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
@@ -174,6 +174,22 @@ class RenderQuantV3_Defensive(IStrategy):
         dataframe.loc[cond, "exit_long"] = 1
         return dataframe
 
+
+    def custom_stoploss(
+        self, pair: str, trade: Trade, current_time: datetime, current_rate: float,
+        current_profit: float, after_fill: bool, **kwargs: Any,
+    ) -> float | None:
+        """Stop-Loss Dinamico com Breakeven Garantido e Trailing Stop."""
+        # 1. Se lucro atingir +2.5%: move stop para +0.6% (Breakeven cobrindo taxas da Kraken de 0.26%/lado)
+        if 0.025 <= current_profit < 0.050:
+            return -(current_profit - 0.006)
+
+        # 2. Se lucro atingir +5.0% ou mais: trailing stop de 2.0% para capturar super-tendencias
+        if current_profit >= 0.050:
+            return -0.020
+
+        # Caso contrario, mantem o stoploss inicial de -5.0%
+        return -0.050
 
     def custom_stake_amount(
         self, pair: str, current_time: datetime, current_rate: float,
