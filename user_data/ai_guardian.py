@@ -82,6 +82,13 @@ def mask_key(k: str) -> str:
     return k[:5] + "..." + k[-4:]
 
 
+# Cache de veredictos por vela (pair -> (timestamp_consulta, veredicto))
+# Garante:
+# 1. Não bloqueia nem polui a rede com chamadas duplicadas no mesmo candle (TTL de 600s = 10m)
+# 2. Respostas antigas NUNCA são reaproveitadas em velas novas (expiração estrita)
+_ENTRY_VERDICT_CACHE: dict[str, tuple[float, dict]] = {}
+
+
 def consult_ai_guardian(
     pair: str,
     rate: float,
@@ -121,6 +128,14 @@ def consult_ai_guardian(
             "origem": "bypass",
         }
 
+    # 2. Cache por vela: reaproveita veredicto recente da mesma vela sem travar o loop
+    now = time.time()
+    cached = _ENTRY_VERDICT_CACHE.get(pair)
+    if cached is not None:
+        cached_ts, cached_verdict = cached
+        if (now - cached_ts) < 600.0:
+            return cached_verdict
+
     # Prompt estruturado para retorno estrito em JSON
     prompt_content = (
         "Você é o Chief Risk Officer AI (Guardião de Risco Cognitivo) de um fundo quantitativo.\n"
@@ -145,6 +160,8 @@ def consult_ai_guardian(
         "max_tokens": 150,
     }
 
+    err_msg = "Resposta não contém JSON válido"
+
     try:
         resp = requests.post(
             endpoint,
@@ -154,7 +171,7 @@ def consult_ai_guardian(
                 "Authorization": f"Bearer {api_key}",
                 "User-Agent": "Freqtrade-AIGuardian/1.0",
             },
-            timeout=10.0,
+            timeout=3.5,
         )
         if resp.status_code == 200:
             data = resp.json()
@@ -193,7 +210,10 @@ def consult_ai_guardian(
                     s["total_vetoes"] = s.get("total_vetoes", 0) + 1
                 s["last_verdict"] = verdict
                 update_state(**s)
+                _ENTRY_VERDICT_CACHE[pair] = (time.time(), verdict)
                 return verdict
+            else:
+                err_msg = f"Resposta 200 não contém JSON válido: {content[:80]}"
 
         else:
             err_msg = f"HTTP {resp.status_code}"
@@ -214,6 +234,7 @@ def consult_ai_guardian(
         "ts": time.strftime("%H:%M:%S UTC"),
     }
     update_state(last_verdict=verdict)
+    _ENTRY_VERDICT_CACHE[pair] = (time.time(), verdict)
     return verdict
 
 
@@ -270,7 +291,7 @@ def consult_ai_exit(
                 "Authorization": f"Bearer {api_key}",
                 "User-Agent": "Freqtrade-AIGuardian/1.0",
             },
-            timeout=8.0,
+            timeout=3.5,
         )
         if resp.status_code == 200:
             data = resp.json()
