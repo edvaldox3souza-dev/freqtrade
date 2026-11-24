@@ -239,9 +239,14 @@ class RenderQuantV4_Adaptive(IStrategy):
         except Exception as exc:
             logger.debug("Falha ao gravar telemetria why_state: %s", exc)
 
-        # Pré-avaliação assíncrona não bloqueante para o Guardião IA (Fase 3.2)
+        # Pré-avaliação assíncrona não bloqueante para o Guardião IA (somente live/dry_run)
         try:
-            if not dataframe.empty and "enter_long" in dataframe.columns and dataframe["enter_long"].iloc[-1] == 1:
+            dp = getattr(self, "dp", None)
+            runmode = getattr(dp, "runmode", None) if dp is not None else None
+            if runmode is None and isinstance(getattr(self, "config", None), dict):
+                runmode = self.config.get("runmode")
+            rm_str = str(getattr(runmode, "value", runmode)).lower() if runmode is not None else "live"
+            if rm_str in ("live", "dry_run") and not dataframe.empty and "enter_long" in dataframe.columns and dataframe["enter_long"].iloc[-1] == 1:
                 from user_data.ai_guardian import enqueue_ai_pre_evaluation
                 last_row = dataframe.iloc[-1]
                 candle_dt = last_row.get("date")
@@ -361,8 +366,15 @@ class RenderQuantV4_Adaptive(IStrategy):
                 logger.warning("V4 [HEAT VETO]: heat projetado acima de %.2f%% - %s vetada", max_heat * 100, pair)
                 return False
 
-            # Gatekeeper Cognitivo AI Guardian O(1) Não Bloqueante (Fase 3.2)
+            # Gatekeeper Cognitivo AI Guardian O(1) Não Bloqueante (somente live/dry_run)
             try:
+                dp_rm = getattr(getattr(self, "dp", None), "runmode", None)
+                if dp_rm is None and isinstance(getattr(self, "config", None), dict):
+                    dp_rm = self.config.get("runmode")
+                rm_str = str(getattr(dp_rm, "value", dp_rm)).lower() if dp_rm is not None else "live"
+                if rm_str not in ("live", "dry_run"):
+                    return True
+
                 from user_data.ai_guardian import get_or_enqueue_ai_verdict, get_state
                 s_ai = get_state()
                 if s_ai.get("enabled", False):

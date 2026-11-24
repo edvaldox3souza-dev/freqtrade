@@ -372,9 +372,16 @@ class RenderQuantV1(IStrategy):
         else:
             dataframe.loc[entry_conditions, "enter_tag"] = "V1:equilibrada_pullback"
 
-        # Pré-avaliação assíncrona não bloqueante para o Guardião IA (Fase 3.2)
+        # Pré-avaliação assíncrona não bloqueante para o Guardião IA (somente live/dry_run)
         try:
-            if not dataframe.empty and dataframe["enter_long"].iloc[-1] == 1:
+            dp = getattr(self, "dp", None)
+            runmode = getattr(dp, "runmode", None) if dp is not None else None
+            if runmode is None and isinstance(getattr(self, "config", None), dict):
+                runmode = self.config.get("runmode")
+            rm_str = str(getattr(runmode, "value", runmode)).lower() if runmode is not None else "live"
+            is_operational_mode = rm_str in ("live", "dry_run")
+
+            if is_operational_mode and not dataframe.empty and dataframe["enter_long"].iloc[-1] == 1:
                 from user_data.ai_guardian import enqueue_ai_pre_evaluation
                 last_row = dataframe.iloc[-1]
                 candle_dt = last_row.get("date")
@@ -617,8 +624,15 @@ class RenderQuantV1(IStrategy):
             self._record_decision(pair, "REJECT", f"Falha na avalia??o de risco/heat: {exc}")
             return False
 
-        # 4. Gatekeeper Cognitivo AI Guardian O(1) Não Bloqueante (Fase 3.2)
+        # 4. Gatekeeper Cognitivo AI Guardian O(1) Não Bloqueante (somente live/dry_run)
         try:
+            dp_rm = getattr(getattr(self, "dp", None), "runmode", None)
+            if dp_rm is None and isinstance(getattr(self, "config", None), dict):
+                dp_rm = self.config.get("runmode")
+            rm_str = str(getattr(dp_rm, "value", dp_rm)).lower() if dp_rm is not None else "live"
+            if rm_str not in ("live", "dry_run"):
+                return True
+
             from user_data.ai_guardian import get_or_enqueue_ai_verdict, get_state
             ai_state = get_state()
             if ai_state.get("enabled", False):
