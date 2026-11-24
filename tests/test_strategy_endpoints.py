@@ -103,3 +103,36 @@ def test_force_strategy_override_admin(tmp_path):
         
         assert boot_strategy == "RenderQuantV1"
 
+
+def test_db_get_handles_both_dict_and_str():
+    from unittest.mock import MagicMock
+
+    from user_data.state_store import db_get
+
+    # Caso 1: PostgreSQL psycopg2 retorna coluna JSONB como dict Python
+    mock_cursor_dict = MagicMock()
+    mock_cursor_dict.fetchone.return_value = ({"active_strategy": "RenderQuantV4_Adaptive"},)
+    mock_cursor_dict.__enter__.return_value = mock_cursor_dict
+
+    mock_conn_dict = MagicMock()
+    mock_conn_dict.cursor.return_value = mock_cursor_dict
+    mock_conn_dict.__enter__.return_value = mock_conn_dict
+
+    with patch("user_data.state_store._connect", return_value=mock_conn_dict):
+        res = db_get("strategy_state")
+        assert res == {"active_strategy": "RenderQuantV4_Adaptive"}
+
+    # Caso 2: Se retornar string json
+    mock_cursor_str = MagicMock()
+    mock_cursor_str.fetchone.return_value = ('{"active_strategy": "RenderQuantV2_Institutional"}',)
+    mock_cursor_str.__enter__.return_value = mock_cursor_str
+
+    mock_conn_str = MagicMock()
+    mock_conn_str.cursor.return_value = mock_cursor_str
+    mock_conn_str.__enter__.return_value = mock_conn_str
+
+    with patch("user_data.state_store._connect", return_value=mock_conn_str):
+        res = db_get("strategy_state")
+        assert res == {"active_strategy": "RenderQuantV2_Institutional"}
+
+

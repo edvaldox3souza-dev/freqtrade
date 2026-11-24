@@ -54,7 +54,14 @@ def db_get(key: str) -> dict | None:
             with conn.cursor() as cur:
                 cur.execute("SELECT value FROM bot_state WHERE key = %s", (key,))
                 row = cur.fetchone()
-                return json.loads(row[0]) if row else None
+                if not row:
+                    return None
+                val = row[0]
+                if isinstance(val, dict):
+                    return val
+                if isinstance(val, str):
+                    return json.loads(val)
+                return val
     except Exception as exc:
         logger.debug("state_store db_get(%s) indisponível: %s", key, exc)
         return None
