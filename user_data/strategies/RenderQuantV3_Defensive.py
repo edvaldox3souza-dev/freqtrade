@@ -9,7 +9,7 @@ import json
 import logging
 import pathlib
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import numpy as np
@@ -77,7 +77,7 @@ class RenderQuantV3_Defensive(IStrategy):
     ema200_floor: float = 0.82          # Piso estrutural: compras em repique de ate 18% abaixo da EMA200
     bb_pos_exit: float = 0.75           # Sai na regressao a media
     rsi_exit: int = 68
-    min_vol_usd_24h: float = 300_000.0  # Volume minimo $300k calibrado para liquidez real USDT na Kraken
+    min_vol_usd_24h: float = 200_000.0  # Volume minimo $200k calibrado para liquidez real USDT na Kraken Spot
     tp_atr_mult: float = 1.5
 
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
@@ -260,12 +260,16 @@ class RenderQuantV3_Defensive(IStrategy):
     ) -> bool:
         """Gate de risco fail-closed: circuit breaker diario -2.5% e heat cap 3%."""
         try:
-            today_start = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
+            ct_utc = current_time.replace(tzinfo=UTC) if current_time.tzinfo is None else current_time.astimezone(UTC)
+            today_start = ct_utc.replace(hour=0, minute=0, second=0, microsecond=0)
             closed = Trade.get_trades_proxy(is_open=False)
-            realized = sum(
-                float(t.close_profit_abs or 0.0)
-                for t in closed if getattr(t, "close_date_utc", None) and t.close_date_utc >= today_start
-            )
+            realized = 0.0
+            for t in closed:
+                cdate = getattr(t, "close_date_utc", None)
+                if cdate:
+                    cdate_utc = cdate.replace(tzinfo=UTC) if cdate.tzinfo is None else cdate.astimezone(UTC)
+                    if cdate_utc >= today_start:
+                        realized += float(t.close_profit_abs or 0.0)
             open_tr = Trade.get_trades_proxy(is_open=True)
             unreal = 0.0
             for t in open_tr:

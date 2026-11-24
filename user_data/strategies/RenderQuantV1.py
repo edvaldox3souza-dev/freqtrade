@@ -81,7 +81,7 @@ class RenderQuantV1(IStrategy):
     KER_MIN_V1: float = 0.35               # Filtro de efici?ncia para modo V1 (veto de chop/ru?do)
     KER_MIN_V2: float = 0.42               # Filtro de efici?ncia para modo V2 Institucional
     portfolio_heat_limit: float = 0.03     # Hard cap de 3.0% de risco total aberto agregado sobre o equity
-    min_24h_volume_usd: float = 2_000_000.0 # M?nimo $2M USD negociados nas ?ltimas 24h (anti-slippage)
+    min_24h_volume_usd: float = 200_000.0   # Mínimo $200k USD/24h calibrado para liquidez real USDT na Kraken Spot
 
     # Clusters de Correla??o (HyperGrok) - Evita risco direcional duplicado nos 6 pares l?quidos
     CORRELATION_CLUSTERS = {
@@ -120,8 +120,8 @@ class RenderQuantV1(IStrategy):
             "mode": self._cached_strategy_mode,
         }
         try:
-            from user_data.state_store import save_state
-            save_state("why_state", payload, [self.WHY_STATE_FILE, pathlib.Path("/freqtrade/user_data/why_state.json")])
+            from user_data.state_store import save_state_async
+            save_state_async("why_state", payload, [self.WHY_STATE_FILE, pathlib.Path("/freqtrade/user_data/why_state.json")])
         except Exception:
             pass
 
@@ -443,9 +443,10 @@ class RenderQuantV1(IStrategy):
         """
         today = current_time.astimezone(UTC).date()
         total_balance = 1000.0
-        if self.wallets is not None:
+        wallets = getattr(self, "wallets", None)
+        if wallets is not None:
             try:
-                total_balance = float(self.wallets.get_total_stake_amount())
+                total_balance = float(wallets.get_total_stake_amount())
             except Exception:
                 pass
 
@@ -668,6 +669,20 @@ class RenderQuantV1(IStrategy):
                     timeframe_secs=900,
                     candle_ts=c_ts,
                 )
+
+                try:
+                    from user_data.shadow_tracker import record_shadow_signal_async
+                    record_shadow_signal_async(
+                        pair=pair,
+                        strategy=self._get_active_strategy_mode(),
+                        entry_rate=rate,
+                        entry_tag=str(entry_tag or "v1_entry"),
+                        ai_approved=bool(verdict.get("aprovado", False)),
+                        ai_conviccao=float(verdict.get("conviccao", 0.0)),
+                        ai_motivo=str(verdict.get("motivo", "")),
+                    )
+                except Exception as exc:
+                    logger.debug("RenderQuant: shadow tracker record falhou: %s", exc)
 
                 if not verdict.get("aprovado", False):
                     motivo_ia = verdict.get("motivo", "Veto emitido pela IA")
@@ -913,11 +928,19 @@ class RenderQuantV1(IStrategy):
         if (now_ts - last_check) < 900.0:
             return None
 
-        # Coleta dados t?cnicos atuais do par
+        # Proteção de Backtesting/Hyperopt: nunca chamar IA externa fora de live/dry_run
+        dp = getattr(self, "dp", None)
+        dp_rm = getattr(dp, "runmode", None) if dp is not None else None
+        if dp_rm is None and isinstance(getattr(self, "config", None), dict):
+            dp_rm = self.config.get("runmode")
+        rm_str = str(getattr(dp_rm, "value", dp_rm)).lower() if dp_rm is not None else "live"
+        if rm_str not in ("live", "dry_run"):
+            return None
+
+        # Coleta dados técnicos atuais do par
         ker_val = 0.40
         atr_val = 0.018
         regime_bull_val = True
-        dp = getattr(self, "dp", None)
         if dp is not None:
             dataframe, _ = dp.get_analyzed_dataframe(pair, self.timeframe)
             if dataframe is not None and not dataframe.empty:
@@ -953,9 +976,10 @@ class RenderQuantV1(IStrategy):
     def get_risk_status(self) -> dict[str, Any]:
         """Snapshot quantitativo em tempo real para o Telegram e Painel Web (Claude Fable 5.1)."""
         total_balance = 1000.0
-        if self.wallets is not None:
+        wallets = getattr(self, "wallets", None)
+        if wallets is not None:
             try:
-                total_balance = float(self.wallets.get_total_stake_amount())
+                total_balance = float(wallets.get_total_stake_amount())
             except Exception:
                 pass
 

@@ -16,7 +16,6 @@ RUN pip install --no-cache-dir psycopg2-binary
 
 COPY --chown=ftuser:ftuser start_bot.py /freqtrade/start_bot.py
 COPY --chown=ftuser:ftuser user_data/ /freqtrade/user_data/
-COPY --chown=ftuser:ftuser user_data/ai_guardian.py /freqtrade/ai_guardian.py
 
 EXPOSE 10000
 

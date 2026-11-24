@@ -234,8 +234,8 @@ class RenderQuantV4_Adaptive(IStrategy):
                 }
                 for p_str in ["user_data/why_state.json", "/freqtrade/user_data/why_state.json"]:
                     p_obj = pathlib.Path(p_str)
-                    p_obj.parent.mkdir(parents=True, exist_ok=True)
-                    p_obj.write_text(json.dumps(why_dict, indent=2), encoding="utf-8")
+                    if p_obj.parent.exists():
+                        p_obj.write_text(json.dumps(why_dict, indent=2), encoding="utf-8")
         except Exception as exc:
             logger.debug("Falha ao gravar telemetria why_state: %s", exc)
 
@@ -335,12 +335,16 @@ class RenderQuantV4_Adaptive(IStrategy):
     ) -> bool:
         """Gate de risco fail-closed: circuit breaker diário -2.5% e heat cap 3-6%."""
         try:
-            today_start = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
+            ct_utc = current_time.replace(tzinfo=timezone.utc) if current_time.tzinfo is None else current_time.astimezone(timezone.utc)
+            today_start = ct_utc.replace(hour=0, minute=0, second=0, microsecond=0)
             closed = Trade.get_trades_proxy(is_open=False)
-            realized = sum(
-                float(t.close_profit_abs or 0.0)
-                for t in closed if getattr(t, "close_date_utc", None) and t.close_date_utc >= today_start
-            )
+            realized = 0.0
+            for t in closed:
+                cdate = getattr(t, "close_date_utc", None)
+                if cdate:
+                    cdate_utc = cdate.replace(tzinfo=timezone.utc) if cdate.tzinfo is None else cdate.astimezone(timezone.utc)
+                    if cdate_utc >= today_start:
+                        realized += float(t.close_profit_abs or 0.0)
             open_tr = Trade.get_trades_proxy(is_open=True)
             unreal = 0.0
             for t in open_tr:
@@ -402,10 +406,10 @@ class RenderQuantV4_Adaptive(IStrategy):
                         timeframe_secs=14400,
                         candle_ts=c_ts,
                     )
-                    # Telemetria de Shadow Trading no Neon PostgreSQL para melhoria contínua das estratégias
+                    # Telemetria assíncrona de Shadow Trading no Neon PostgreSQL (não bloqueante)
                     try:
-                        from user_data.shadow_tracker import record_shadow_signal
-                        record_shadow_signal(
+                        from user_data.shadow_tracker import record_shadow_signal_async
+                        record_shadow_signal_async(
                             pair=pair,
                             strategy="RenderQuantV4_Adaptive",
                             entry_rate=rate,

@@ -46,7 +46,7 @@ class TestRenderQuantV3Calibration:
         assert strategy.use_custom_stoploss is True
         assert strategy.bb_pos_entry == 0.12
         assert strategy.ema200_floor == 0.82
-        assert strategy.min_vol_usd_24h == 300_000.0
+        assert strategy.min_vol_usd_24h == 200_000.0
         assert strategy.stoploss == -0.05
         assert strategy.order_types.get("stoploss_on_exchange") is True
         assert strategy.order_types.get("stoploss_on_exchange_interval") == 60
