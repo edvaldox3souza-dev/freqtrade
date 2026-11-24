@@ -58,18 +58,39 @@ def _harden_environment() -> None:
         if _is_unsafe(os.environ.get(key)):
             os.environ[key] = default
 
+    # Persistência estável de credenciais de API no Neon DB / cache local
+    saved_creds = {}
+    try:
+        from user_data.state_store import load_state
+        saved_creds = load_state("api_server_creds", [pathlib.Path("/tmp/api_server_creds.json")], {})
+    except Exception as exc:  # noqa: BLE001
+        print(f"[bootstrap] alerta leitura state_store: {exc}", flush=True)
+
+    creds_updated = False
     for key in _REQUIRED_SECRETS:
         current = os.environ.get(key)
         if _is_unsafe(current):
-            generated = _secrets.token_urlsafe(48)
-            os.environ[key] = generated
-            print(f"[bootstrap] {key}: ausente/placeholder -> segredo aleatório gerado "
-                  f"(configure a env var no Render para credencial estável!).", flush=True)
+            if saved_creds and saved_creds.get(key) and not _is_unsafe(saved_creds.get(key)):
+                os.environ[key] = saved_creds[key]
+                print(f"[bootstrap] {key}: recuperado do Neon DB (credencial estável mantida).", flush=True)
+            else:
+                generated = _secrets.token_urlsafe(32)
+                os.environ[key] = generated
+                saved_creds[key] = generated
+                creds_updated = True
+                print(f"[bootstrap] {key}: gerado e salvo para persistência estável.", flush=True)
         elif key in _MIN_LEN and len(os.environ[key].strip()) < _MIN_LEN[key]:
             errors.append(f"{key} tem {len(os.environ[key].strip())} caracteres (mínimo {_MIN_LEN[key]}).")
 
         if key in _MIN_LEN:
             print(f"[bootstrap] {key}: {_fingerprint(os.environ[key])}", flush=True)
+
+    if creds_updated:
+        try:
+            from user_data.state_store import save_state
+            save_state("api_server_creds", saved_creds, [pathlib.Path("/tmp/api_server_creds.json")])
+        except Exception as exc:  # noqa: BLE001
+            print(f"[bootstrap] alerta salvamento state_store: {exc}", flush=True)
 
     if errors:
         print("[bootstrap] FALHA DE SEGURANÇA — abortando:", file=sys.stderr, flush=True)
@@ -127,7 +148,7 @@ PT_BR_KEYBOARD = [
     ["▶️ Iniciar Robô", "⏸️ Pausar Robô"],
     ["🏦 Corretora", "🧠 Guardião IA"],
     ["🩺 Diagnóstico", "⚙️ Configurações"],
-    ["❓ Ajuda (Guia)"],
+    ["🌐 Painel Web", "❓ Ajuda (Guia)"],
 ]
 
 PT_BR_BUTTON_MAP = {
@@ -156,6 +177,9 @@ PT_BR_BUTTON_MAP = {
     "🧠 IA Guardian": "_cmd_ai_guardian",
     "🩺 Diagnóstico": "_cmd_diag",
     "🩺 Saúde do Robô": "_cmd_diag",
+    "🌐 Painel Web": "_cmd_painel_web",
+    "🌐 Painel": "_cmd_painel_web",
+    "🌐 Web": "_cmd_painel_web",
 }
 
 WELCOME_PT_BR = (
@@ -852,7 +876,7 @@ def build_main_menu_inline_markup():
         [InlineKeyboardButton("📊 Operações Abertas", callback_data="unk_nav:status"), InlineKeyboardButton("💰 Lucros", callback_data="unk_nav:profit")],
         [InlineKeyboardButton("❓ Por Que Não Entrou?", callback_data="unk_nav:why"), InlineKeyboardButton("🔭 Scanner Mercado", callback_data="unk_nav:scanner")],
         [InlineKeyboardButton("👻 Shadow Trading (Neon)", callback_data="unk_nav:shadow"), InlineKeyboardButton("🩺 Diagnóstico", callback_data="unk_nav:diag")],
-        [InlineKeyboardButton("🔄 Recarregar Painel", callback_data="unk_nav:menu")],
+        [InlineKeyboardButton("🌐 Painel Web (Cockpit)", callback_data="unk_nav:painel"), InlineKeyboardButton("🔄 Recarregar", callback_data="unk_nav:menu")],
     ])
 
 
@@ -1844,6 +1868,9 @@ def install_pt_br_hooks() -> None:
             elif sub == "scanner":
                 await _cmd_scanner(update, context)
                 return
+            elif sub == "painel":
+                await _cmd_painel_web(update, context)
+                return
         if data.startswith("unk_input:"):
             field = data.split(":", 1)[1]
             pending_input[cid] = (field, time.monotonic())
@@ -2042,10 +2069,34 @@ def install_pt_br_hooks() -> None:
         )
         threading.Timer(2.0, lambda: os._exit(0)).start()
 
+    def _get_target_message(update):
+        target = getattr(update, "effective_message", None) or getattr(update, "message", None)
+        if not target and getattr(update, "callback_query", None):
+            target = update.callback_query.message
+        return target
+
+    async def _cmd_painel_web(update, context):
+        """Exibe link e credenciais permanentes para acesso ao FreqUI Cockpit."""
+        if not is_authorized_chat(update):
+            return
+        target = _get_target_message(update)
+        u, p = get_api_creds()
+        url = "https://freqtrade-mnhu.onrender.com"
+        msg = (
+            "🌐 *Painel Web FreqUI (Cockpit)*\n\n"
+            f"• *URL:* {url}\n"
+            f"• *Usuário da API:* `{u}`\n"
+            f"• *Senha da API:* `{p}`\n\n"
+            "💡 _Toque na senha acima para copiá-la diretamente e entrar no painel pelo navegador._"
+        )
+        if target:
+            await target.reply_text(msg, parse_mode="Markdown")
+
     async def _cmd_diag(update, context):
         """Diagnóstico em tempo real do estado do robô e subsistemas."""
         if not is_authorized_chat(update):
             return
+        target = _get_target_message(update)
         st = get_exchange_status()
         is_dry = bool(st.get("dry_run", True))
         mode_str = "Simulado (Dry-Run)" if is_dry else "🚀 CONTA REAL (Kraken Spot LIVE)"
@@ -2072,32 +2123,38 @@ def install_pt_br_hooks() -> None:
             f"• *Watchdogs:* RAM (420MB) + Neon Anti-Sleep Ativos\n\n"
             "💡 _Seu bot está respondendo normalmente aos comandos._"
         )
-        await update.message.reply_text(diag_msg, parse_mode="Markdown")
+        if target:
+            await target.reply_text(diag_msg, parse_mode="Markdown")
 
     async def _cmd_estrategia(update, context):
         if not is_authorized_chat(update):
             return
-        await update.message.reply_text(
-            format_estrategia_text(),
-            parse_mode="Markdown",
-            reply_markup=build_estrategia_inline_markup(),
-        )
+        target = _get_target_message(update)
+        if target:
+            await target.reply_text(
+                format_estrategia_text(),
+                parse_mode="Markdown",
+                reply_markup=build_estrategia_inline_markup(),
+            )
 
     async def _cmd_why(update, context):
         """Diagnóstico matemático em tempo real: distância exata de cada par para a entrada da V3."""
         if not is_authorized_chat(update):
             return
-        target = getattr(update, "effective_message", None) or getattr(update, "message", None)
-        if not target and getattr(update, "callback_query", None):
-            target = update.callback_query.message
+        target = _get_target_message(update)
 
-        why_paths = [pathlib.Path("user_data/why_state.json"), pathlib.Path("/freqtrade/user_data/why_state.json")]
+        why_paths = [
+            pathlib.Path("/tmp/why_state.json"),
+            pathlib.Path("user_data/why_state.json"),
+            pathlib.Path("/freqtrade/user_data/why_state.json"),
+        ]
         state = None
         for p in why_paths:
             try:
                 if p.exists():
                     state = json.loads(p.read_text(encoding="utf-8"))
-                    break
+                    if state and "pairs" in state:
+                        break
             except Exception:
                 pass
 
@@ -2317,6 +2374,10 @@ def install_pt_br_hooks() -> None:
             "/scanner", "scanner", "/mercado", "mercado", "scan", "/scan",
             "🔭scannermercado", "🔭scanner", "scannermercado"
         }
+        _ALIASES_PAINEL = {
+            "/painel", "painel", "/web", "web", "/frequi", "frequi",
+            "🌐painelweb", "🌐painel", "painelweb", "cockpit"
+        }
 
         if norm in ("/start", "start", "/menu", "menu", "iniciar", "/iniciar"):
             pending_input.pop(cid, None)
@@ -2331,6 +2392,11 @@ def install_pt_br_hooks() -> None:
         if norm in _ALIASES_DIAG or txt in ("🩺 Diagnóstico", "🩺 Saúde do Robô"):
             pending_input.pop(cid, None)
             await _cmd_diag(update, context)
+            raise ApplicationHandlerStop()
+
+        if norm in _ALIASES_PAINEL or txt in ("🌐 Painel Web", "🌐 Painel", "🌐 Web"):
+            pending_input.pop(cid, None)
+            await _cmd_painel_web(update, context)
             raise ApplicationHandlerStop()
 
         if norm in _ALIASES_ESTRATEGIA or txt in ("🎯 Mudar Estratégia", "🎯 Alternar Estratégia"):
@@ -2415,6 +2481,9 @@ def install_pt_br_hooks() -> None:
             orig_add_handler(self, CommandHandler("diagnostico", _cmd_diag), group=-1)
             orig_add_handler(self, CommandHandler("shadow", _cmd_shadow), group=-1)
             orig_add_handler(self, CommandHandler("telemetria", _cmd_shadow), group=-1)
+            orig_add_handler(self, CommandHandler("painel", _cmd_painel_web), group=-1)
+            orig_add_handler(self, CommandHandler("web", _cmd_painel_web), group=-1)
+            orig_add_handler(self, CommandHandler("frequi", _cmd_painel_web), group=-1)
             orig_add_handler(self, CommandHandler("set_corretora", _cmd_set_corretora))
             orig_add_handler(self, CommandHandler("set_api", _cmd_set_api))
             orig_add_handler(self, CommandHandler("modo_simulado", lambda u, c: _cmd_modo(u, c, True)))

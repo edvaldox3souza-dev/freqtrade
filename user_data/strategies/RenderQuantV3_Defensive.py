@@ -105,18 +105,21 @@ class RenderQuantV3_Defensive(IStrategy):
         if dataframe.empty or not pair:
             return
         paths = [
-            pathlib.Path("user_data/why_state.json"),
+            pathlib.Path("/tmp/why_state.json"),
             pathlib.Path("/freqtrade/user_data/why_state.json"),
+            pathlib.Path("user_data/why_state.json"),
         ]
-        target = paths[1] if paths[1].parent.exists() else paths[0]
         try:
             existing = {}
-            if target.exists():
-                try:
-                    existing = json.loads(target.read_text(encoding="utf-8"))
-                except (json.JSONDecodeError, OSError):
-                    existing = {}
-            pairs_dict = existing.get("pairs", {})
+            for p in paths:
+                if p.exists():
+                    try:
+                        existing = json.loads(p.read_text(encoding="utf-8"))
+                        if existing and "pairs" in existing:
+                            break
+                    except (json.JSONDecodeError, OSError):
+                        continue
+            pairs_dict = existing.get("pairs", {}) if isinstance(existing, dict) else {}
             last_row = dataframe.iloc[-1]
             c = float(last_row.get("close", 0) or 0)
             bb = float(last_row.get("bb_pos", 1.0) if last_row.get("bb_pos") is not None else 1.0)
@@ -141,7 +144,13 @@ class RenderQuantV3_Defensive(IStrategy):
                 "pairs": pairs_dict,
                 "updated_at": time.strftime("%H:%M:%S UTC"),
             }
-            target.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            json_str = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+            for p in paths:
+                try:
+                    if p.parent.exists():
+                        p.write_text(json_str, encoding="utf-8")
+                except OSError:
+                    pass
         except Exception as exc:  # noqa: BLE001
             logger.debug("V3: falha na telemetria: %s", exc)
 

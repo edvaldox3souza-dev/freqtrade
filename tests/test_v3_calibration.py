@@ -144,3 +144,39 @@ class TestTelegramNoPinnedMessages:
         start_bot_path = repo_root / "start_bot.py"
         content = start_bot_path.read_text(encoding="utf-8")
         assert "unpin_all_chat_messages" in content
+
+
+class TestBotRobustnessAndNoFakes:
+    def test_get_target_message_helper_present(self):
+        """Garante que o helper _get_target_message esta presente para proteger callbacks contra NoneType."""
+        start_bot_path = repo_root / "start_bot.py"
+        content = start_bot_path.read_text(encoding="utf-8")
+        assert "def _get_target_message(update):" in content
+        assert "_cmd_painel_web" in content
+        assert "🌐 Painel Web" in content
+
+    def test_telemetry_saves_to_tmp(self, strategy, tmp_path):
+        """Verifica se _record_telemetry e resiliente e escreve no /tmp/why_state.json."""
+        df = pd.DataFrame({
+            "close": [60000.0],
+            "bb_pos": [0.45],
+            "rsi": [52.0],
+            "ema200": [70000.0],
+            "vol_usd_24h": [400_000.0],
+            "enter_long": [0],
+        })
+        strategy._record_telemetry(df, "BTC/USDT")
+        tmp_why = pathlib.Path("/tmp/why_state.json")
+        # Se estiver em ambiente onde /tmp existe, o arquivo deve ser gravado
+        if pathlib.Path("/tmp").exists():
+            assert tmp_why.exists()
+            content = tmp_why.read_text(encoding="utf-8")
+            assert "BTC/USDT" in content
+
+    def test_api_server_creds_persistence_structure(self):
+        """Garante que _harden_environment possui rotina de persistencia estavel no state_store."""
+        start_bot_path = repo_root / "start_bot.py"
+        content = start_bot_path.read_text(encoding="utf-8")
+        assert 'load_state("api_server_creds"' in content
+        assert 'save_state("api_server_creds"' in content
+
