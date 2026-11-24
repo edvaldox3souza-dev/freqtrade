@@ -7,7 +7,7 @@ Backtest (taxas Kraken 0.26%/lado, 6 pares, risk gates ativos):
 """
 import logging
 from datetime import datetime
-from typing import Any, Optional, Union
+from typing import Any
 
 import numpy as np
 import talib.abstract as ta
@@ -27,9 +27,9 @@ class RenderQuantV3_Defensive(IStrategy):
 
     stoploss: float = -0.05
     use_custom_stoploss: bool = False
-    minimal_roi = {"0": 0.10}  # TP principal e o sinal de regressao; ROI e rede de seguranca
+    minimal_roi = {"0": 0.10}  # noqa: RUF012  # TP principal e o sinal de regressao; ROI e rede de seguranca
 
-    order_types = {
+    order_types = {  # noqa: RUF012
         "entry": "limit",
         "exit": "limit",
         "emergency_exit": "market",
@@ -124,16 +124,16 @@ class RenderQuantV3_Defensive(IStrategy):
 
     def custom_stake_amount(
         self, pair: str, current_time: datetime, current_rate: float,
-        proposed_stake: float, min_stake: Optional[float], max_stake: float,
-        leverage: float, entry_tag: Optional[str], side: str, **kwargs: Any,
+        proposed_stake: float, min_stake: float | None, max_stake: float,
+        leverage: float, entry_tag: str | None, side: str, **kwargs: Any,
     ) -> float:
         """Risk parity: 1% da banca por trade, cap 10% (identico ao backtest vencedor), com fallback seguro para ordermin."""
         total_wallet = max(float(max_stake), float(proposed_stake), 0.0)
         if self.wallets is not None:
             try:
                 total_wallet = float(self.wallets.get_total_stake_amount())
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("V3: fallback wallet balance: %s", exc)
         stop_d = 0.05 + 0.0062  # stop 5% + round-trip estimado
         stake = min((total_wallet * 0.01) / stop_d, total_wallet * 0.10, float(max_stake))
         if min_stake is not None and stake < float(min_stake):
@@ -148,7 +148,7 @@ class RenderQuantV3_Defensive(IStrategy):
 
     def confirm_trade_entry(
         self, pair: str, order_type: str, amount: float, rate: float,
-        time_in_force: str, current_time: datetime, entry_tag: Optional[str],
+        time_in_force: str, current_time: datetime, entry_tag: str | None,
         side: str, **kwargs: Any,
     ) -> bool:
         """Gate de risco fail-closed: circuit breaker diario -2.5% e heat cap 3%."""
@@ -167,7 +167,10 @@ class RenderQuantV3_Defensive(IStrategy):
                     unreal += float(t.calc_profit_abs(r))
             total_balance = 1000.0
             if self.wallets is not None:
-                total_balance = float(self.wallets.get_total_stake_amount())
+                try:
+                    total_balance = float(self.wallets.get_total_stake_amount())
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("V3: fallback balance: %s", exc)
             daily_dd = (realized + unreal) / max(total_balance, 10.0)
             if daily_dd <= -0.025:
                 logger.warning("V3 [CIRCUIT BREAKER]: dd diario %.2f%% - entrada %s vetada", daily_dd * 100, pair)
@@ -210,9 +213,9 @@ class RenderQuantV3_Defensive(IStrategy):
                         logger.warning("V3 [AI GUARDIAN VETO]: entrada em %s vetada pela IA: %s", pair, verdict.get("motivo"))
                         return False
                     logger.info("V3 [AI GUARDIAN PASS]: entrada em %s aprovada pela IA (%.0f%% | %s)", pair, verdict.get("conviccao", 0.70) * 100, verdict.get("motivo"))
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 logger.debug("V3: falha não crítica na consulta ao AI Guardian: %s", exc)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.error("V3 [FAIL-CLOSED]: erro no gate de risco (%s) - %s vetada", exc, pair)
             return False
         return True
@@ -220,7 +223,7 @@ class RenderQuantV3_Defensive(IStrategy):
     def custom_exit(
         self, pair: str, trade: Trade, current_time: datetime, current_rate: float,
         current_profit: float, **kwargs: Any,
-    ) -> Optional[Union[str, bool]]:
+    ) -> str | bool | None:
         """Take-profit objetivo por ATR (1.5x), como no backtest vencedor."""
         if self.dp is None:
             return None
@@ -231,7 +234,7 @@ class RenderQuantV3_Defensive(IStrategy):
             atr_pct = float(df["atr_pct"].iloc[-1] or 0.015)
             if current_profit >= self.tp_atr_mult * atr_pct:
                 return "v3_tp_atr"
-        except Exception:
+        except Exception:  # noqa: BLE001
             return None
         return None
 

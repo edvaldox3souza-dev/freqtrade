@@ -6,10 +6,11 @@ import json
 import logging
 import os
 import pathlib
+import re
 import threading
 import time
-import urllib.request
-import re
+
+import requests
 
 from user_data.state_store import load_state, save_state
 
@@ -45,8 +46,8 @@ def _get_target_path() -> pathlib.Path:
         try:
             if p.parent.exists():
                 return p
-        except Exception:
-            pass
+        except OSError as exc:
+            logger.debug("[AI GUARDIAN] Path check failed for %s: %s", p, exc)
     return STATE_PATHS[1]
 
 
@@ -145,20 +146,18 @@ def consult_ai_guardian(
     }
 
     try:
-        req_data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
+        resp = requests.post(
             endpoint,
-            data=req_data,
+            json=payload,
             headers={
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {api_key}",
                 "User-Agent": "Freqtrade-AIGuardian/1.0",
             },
+            timeout=10.0,
         )
-        # Timeout calibrado de 10.0s (tempo médio de resposta do Claude Fable via Mirai é ~4.2s)
-        with urllib.request.urlopen(req, timeout=10.0) as resp:
-            raw_body = resp.read().decode("utf-8")
-            data = json.loads(raw_body)
+        if resp.status_code == 200:
+            data = resp.json()
             content = data["choices"][0]["message"]["content"].strip()
 
             # Extrai o bloco JSON usando regex defensivo
@@ -196,17 +195,21 @@ def consult_ai_guardian(
                 update_state(**s)
                 return verdict
 
-    except urllib.error.URLError as e:
-        logger.warning("[AI GUARDIAN] Timeout/Rede (%s) -> Fallback liberal seguro", e)
-    except Exception as exc:
-        logger.warning("[AI GUARDIAN] Exceção na consulta (%s) -> Fallback liberal seguro", exc)
+        else:
+            err_msg = f"HTTP {resp.status_code}"
+    except requests.RequestException as e:
+        logger.warning("[AI GUARDIAN FAIL-CLOSED] Timeout/Rede (%s) -> Veto preventivo", e)
+        err_msg = f"Timeout/Rede na API ({e})"
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[AI GUARDIAN FAIL-CLOSED] Exceção na consulta (%s) -> Veto preventivo", exc)
+        err_msg = f"Erro na API ({exc})"
 
-    # Fallback seguro: se a API do Mirai falhar, não bloqueia o trade do motor matemático
+    # Fail-Closed institucional: se a IA estiver ativa mas a chamada falhar, veta preventivamente
     verdict = {
-        "aprovado": True,
-        "conviccao": 0.50,
-        "motivo": "Bypass defensivo (Timeout de API)",
-        "origem": "fallback",
+        "aprovado": False,
+        "conviccao": 0.0,
+        "motivo": f"Fail-closed: {err_msg}",
+        "origem": "fail_closed",
         "pair": pair,
         "ts": time.strftime("%H:%M:%S UTC"),
     }
@@ -259,19 +262,18 @@ def consult_ai_exit(
     }
 
     try:
-        req_data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
+        resp = requests.post(
             endpoint,
-            data=req_data,
+            json=payload,
             headers={
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {api_key}",
                 "User-Agent": "Freqtrade-AIGuardian/1.0",
             },
+            timeout=8.0,
         )
-        with urllib.request.urlopen(req, timeout=8.0) as resp:
-            raw_body = resp.read().decode("utf-8")
-            data = json.loads(raw_body)
+        if resp.status_code == 200:
+            data = resp.json()
             content = data["choices"][0]["message"]["content"].strip()
 
             json_match = re.search(r"\{.*\}", content, re.DOTALL)
@@ -290,7 +292,7 @@ def consult_ai_exit(
                     "origem": "ia",
                 }
 
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         logger.debug("[AI GUARDIAN EXIT] Erro/Timeout na consulta de saída: %s", exc)
 
     return {"sair": False, "motivo": "Fallback passivo (mantém ordens no livro)", "origem": "fallback"}
@@ -313,20 +315,21 @@ def test_ai_connection() -> tuple[bool, str]:
             "messages": [{"role": "user", "content": 'Responda estritamente em JSON: {"status": "ok"}'}],
             "max_tokens": 30,
         }
-        req_data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
+        resp = requests.post(
             endpoint,
-            data=req_data,
+            json=payload,
             headers={
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {api_key}",
                 "User-Agent": "Freqtrade-AIGuardian/1.0",
             },
+            timeout=12.0,
         )
-        with urllib.request.urlopen(req, timeout=12.0) as resp:
-            latency_ms = int((time.time() - t0) * 1000)
+        latency_ms = int((time.time() - t0) * 1000)
+        if resp.status_code == 200:
             return True, f"✅ Conexão OK! Modelo: `{s.get('model')}` | Latência: `{latency_ms}ms`"
-    except Exception as exc:
+        return False, f"❌ Erro de status HTTP {resp.status_code}"
+    except Exception as exc:  # noqa: BLE001
         return False, f"❌ Erro de conexão ({exc})"
 
 
