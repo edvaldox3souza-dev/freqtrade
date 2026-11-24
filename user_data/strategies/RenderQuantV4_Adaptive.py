@@ -133,9 +133,10 @@ class RenderQuantV4_Adaptive(IStrategy):
         if hasattr(self, "config") and self.config:
             stake = self.config.get("stake_currency", "USDT")
         btc_pair = f"BTC/{stake}"
-        if metadata.get("pair") != btc_pair and self.dp is not None:
+        dp = getattr(self, "dp", None)
+        if metadata.get("pair") != btc_pair and dp is not None:
             try:
-                btc_df = self.dp.get_pair_dataframe(btc_pair, self.timeframe)
+                btc_df = dp.get_pair_dataframe(btc_pair, self.timeframe)
                 if btc_df is not None and not btc_df.empty:
                     btc_close = btc_df["close"]
                     btc_ema50 = ta.EMA(btc_df, timeperiod=50)
@@ -274,20 +275,26 @@ class RenderQuantV4_Adaptive(IStrategy):
         proposed_stake: float, min_stake: Optional[float], max_stake: float,
         leverage: float, entry_tag: Optional[str], side: str, **kwargs: Any,
     ) -> float:
-        """Risk parity institucional com fallback seguro para a ordem mínima da Kraken."""
+        """Risk parity institucional com reserva de taxas e veto estrito se min_stake violar risco."""
+        if not np.isfinite(max_stake) or max_stake <= 0:
+            return 0.0
         total_wallet = max(float(max_stake), float(proposed_stake), 0.0)
-        if self.wallets is not None:
+        wallets = getattr(self, "wallets", None)
+        if wallets is not None:
             try:
-                total_wallet = float(self.wallets.get_total_stake_amount())
+                total_wallet = float(wallets.get_total_stake_amount())
             except Exception:
                 pass
         stop_d = 0.05 + 0.0062
-        stake = min((total_wallet * 0.01) / stop_d, total_wallet * 0.10, float(max_stake))
+        fee_buffer_pct = 0.0062
+        effective_max_stake = float(max_stake) * (1.0 - fee_buffer_pct)
+        stake = min((total_wallet * 0.01) / stop_d, total_wallet * 0.10, effective_max_stake)
         if min_stake is not None and stake < float(min_stake):
-            if float(min_stake) <= total_wallet:
-                stake = float(min_stake)
-            else:
-                return 0.0
+            logger.warning(
+                "V4 [RISK VETO]: Ordem em %s recusada – min_stake ($%.2f) excede teto aprovado ($%.2f | banca=$%.2f).",
+                pair, float(min_stake), stake, total_wallet,
+            )
+            return 0.0
         if not np.isfinite(stake) or stake <= 0:
             return 0.0
         return round(float(stake), 8)

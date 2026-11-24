@@ -759,30 +759,28 @@ class RenderQuantV1(IStrategy):
         except Exception:
             pass
 
-        # 4c. Cap máximo padrão de carteira (10% V1 / 8% V2)
-        cap = min(calculated_stake, total_wallet * active_stake_ratio, float(max_stake))
+        # 4c. Cap máximo padrão de carteira (10% V1 / 8% V2) e reserva efetiva de taxas sobre saldo livre
+        # Na Kraken Spot, taxas taker (0.26%/lado) + slippage (~0.10%) exigem margem livre no saldo.
+        fee_buffer_pct = (self.taker_fee_pct * 2.0) + (self.slip_floor_bps / 10000.0)
+        effective_max_stake = float(max_stake) * (1.0 - fee_buffer_pct)
+        cap = min(calculated_stake, total_wallet * active_stake_ratio, effective_max_stake)
 
-        # 4d. Trava e adequação de min_stake da corretora (Regra 2)
+        # 4d. Trava estrita de min_stake da corretora (Regra 1 - Sem exceção que viole risco aprovado)
+        # Se o lote mínimo da corretora exceder o cap de risco/exposição ou o saldo livre pós-taxas,
+        # a estratégia DEVE recusar a operação explicitamente.
         if min_stake is not None and cap < float(min_stake):
             f_min_stake = float(min_stake)
-            fee_reserve = max(0.50, total_wallet * 0.02)
-            max_micro_slot = total_wallet * 0.40  # Teto defensivo: no máximo 40% da micro-banca por ativo
-
-            # Verifica se atende a todas as condições de segurança para micro-banca
-            if f_min_stake <= float(max_stake) and f_min_stake <= max_micro_slot and f_min_stake <= (total_wallet - fee_reserve):
-                logger.info(
-                    "RenderQuant [MICRO-STAKE ADJUSTED]: Stake em %s ajustado de $%.2f para min_stake da Kraken ($%.2f) "
-                    "(banca: $%.2f, slot máx 40%%: $%.2f, reserva taxas: $%.2f).",
-                    pair, cap, f_min_stake, total_wallet, max_micro_slot, fee_reserve,
-                )
-                cap = f_min_stake
-            else:
-                logger.warning(
-                    "RenderQuant [RISK VETO]: Ordem em %s descartada – min_stake ($%.2f) excede limite de micro-banca "
-                    "(teto 40%%: $%.2f, disponível: $%.2f, banca: $%.2f).",
-                    pair, f_min_stake, max_micro_slot, float(max_stake), total_wallet,
-                )
-                return 0.0
+            logger.warning(
+                "RenderQuant [RISK VETO]: Ordem em %s recusada – min_stake ($%.2f) excede o teto de risco/exposição "
+                "aprovado ($%.2f | cap=%.0f%% de $%.2f | max_stake pós-taxas=$%.2f).",
+                pair,
+                f_min_stake,
+                cap,
+                active_stake_ratio * 100.0,
+                total_wallet,
+                effective_max_stake,
+            )
+            return 0.0
 
         if not np.isfinite(cap) or cap <= 0:
             return 0.0

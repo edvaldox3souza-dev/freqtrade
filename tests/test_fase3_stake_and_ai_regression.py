@@ -44,7 +44,7 @@ class TestStakePolicyV1V2V3V4:
             pair="ADA/USDT", current_time=datetime.now(), current_rate=0.1465,
             proposed_stake=1.63, min_stake=3.76, max_stake=9999.0, leverage=1.0, entry_tag=None, side="long"
         )
-        assert stake == 3.76, f"Esperado 3.76 para cobrir min_stake na micro-banca, obteve {stake}"
+        assert stake == 0.0, f"Esperado 0.0 (veto estrito: min_stake 3.76 excede cap 10% = 1.63), obteve {stake}"
 
     def test_v1_micro_wallet_kraken_btc(self):
         strat = RenderQuantV1()
@@ -54,7 +54,7 @@ class TestStakePolicyV1V2V3V4:
             pair="BTC/USDT", current_time=datetime.now(), current_rate=60000.0,
             proposed_stake=1.63, min_stake=4.85, max_stake=9999.0, leverage=1.0, entry_tag=None, side="long"
         )
-        assert stake == 4.85, f"Esperado 4.85 para cobrir min_stake BTC, obteve {stake}"
+        assert stake == 0.0, f"Esperado 0.0 (veto estrito: min_stake 4.85 excede cap 10% = 1.63), obteve {stake}"
 
     def test_v1_micro_wallet_insufficient_for_min_stake(self):
         strat = RenderQuantV1()
@@ -95,7 +95,7 @@ class TestStakePolicyV1V2V3V4:
             pair="SOL/USDT", current_time=datetime.now(), current_rate=70.0,
             proposed_stake=1.30, min_stake=3.70, max_stake=9999.0, leverage=1.0, entry_tag=None, side="long"
         )
-        assert stake == 3.70, f"Esperado 3.70 na V2 para cobrir min_stake, obteve {stake}"
+        assert stake == 0.0, f"Esperado 0.0 na V2 (veto estrito: min_stake 3.70 excede cap 8% = 1.30), obteve {stake}"
 
 
 class TestAIGuardianResilience:
@@ -112,8 +112,10 @@ class TestAIGuardianResilience:
         import requests
         with (
             patch("user_data.ai_guardian.get_state", return_value=mock_state),
+            patch("user_data.ai_guardian.update_state"),
             patch("requests.post", side_effect=requests.Timeout("Connection timed out")),
         ):
+            ai_guardian.clear_verdict_cache()
             t0 = time.time()
             res = ai_guardian.consult_ai_guardian(
                 pair="BTC/USDT", rate=60000.0, ker=0.45, atr_pct=0.018, vol_z=1.2,
@@ -136,8 +138,10 @@ class TestAIGuardianResilience:
         mock_resp.text = "Internal Server Error"
         with (
             patch("user_data.ai_guardian.get_state", return_value=mock_state),
+            patch("user_data.ai_guardian.update_state"),
             patch("requests.post", return_value=mock_resp),
         ):
+            ai_guardian.clear_verdict_cache()
             res = ai_guardian.consult_ai_guardian(
                 pair="ETH/USDT", rate=1600.0, ker=0.40, atr_pct=0.02, vol_z=1.0,
                 regime_bull=True, daily_drawdown_pct=0.0
@@ -159,8 +163,10 @@ class TestAIGuardianResilience:
         }
         with (
             patch("user_data.ai_guardian.get_state", return_value=mock_state),
+            patch("user_data.ai_guardian.update_state"),
             patch("requests.post", return_value=mock_resp),
         ):
+            ai_guardian.clear_verdict_cache()
             res = ai_guardian.consult_ai_guardian(
                 pair="SOL/USDT", rate=70.0, ker=0.40, atr_pct=0.02, vol_z=1.0,
                 regime_bull=True, daily_drawdown_pct=0.0

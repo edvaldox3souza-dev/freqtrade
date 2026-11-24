@@ -82,11 +82,38 @@ def mask_key(k: str) -> str:
     return k[:5] + "..." + k[-4:]
 
 
-# Cache de veredictos por vela (pair -> (timestamp_consulta, veredicto))
+# Cache thread-safe de veredictos por vela e sinal
+# Chave: (pair, mode, side, candle_bucket, signal_tag)
 # Garante:
-# 1. Não bloqueia nem polui a rede com chamadas duplicadas no mesmo candle (TTL de 600s = 10m)
-# 2. Respostas antigas NUNCA são reaproveitadas em velas novas (expiração estrita)
-_ENTRY_VERDICT_CACHE: dict[str, tuple[float, dict]] = {}
+# 1. Alinhamento estrito à vela do timeframe (padrão 900s = 15m): nunca atravessa virada de vela
+# 2. Diferencia par, estratégia (mode), lado (side) e sinal (signal_tag)
+# 3. Respostas fail_closed NUNCA são cacheadas (permite recuperação imediata da API)
+# 4. Eviction automática com limite máximo de entradas e controle de concorrência in-flight
+_CACHE_LOCK = threading.RLock()
+_ENTRY_VERDICT_CACHE: dict[tuple[str, str, str, int, str], tuple[float, dict]] = {}
+_IN_FLIGHT_EVENTS: dict[tuple[str, str, str, int, str], threading.Event] = {}
+_MAX_CACHE_SIZE = 256
+_DEFAULT_TIMEFRAME_SECS = 900
+
+
+def clear_verdict_cache() -> None:
+    """Limpa o cache de veredictos em memória (útil em testes e reinicializações)."""
+    with _CACHE_LOCK:
+        _ENTRY_VERDICT_CACHE.clear()
+        _IN_FLIGHT_EVENTS.clear()
+
+
+def _prune_cache_locked(now: float, timeframe_secs: int) -> None:
+    """Remove entradas expiradas por tempo de vida e aplica limite máximo LRU simples."""
+    expired_keys = [
+        k for k, (ts, _) in _ENTRY_VERDICT_CACHE.items()
+        if (now - ts) >= timeframe_secs
+    ]
+    for k in expired_keys:
+        _ENTRY_VERDICT_CACHE.pop(k, None)
+    while len(_ENTRY_VERDICT_CACHE) >= _MAX_CACHE_SIZE:
+        oldest_key = min(_ENTRY_VERDICT_CACHE, key=lambda k: _ENTRY_VERDICT_CACHE[k][0])
+        _ENTRY_VERDICT_CACHE.pop(oldest_key, None)
 
 
 def consult_ai_guardian(
@@ -98,11 +125,15 @@ def consult_ai_guardian(
     regime_bull: bool,
     daily_drawdown_pct: float,
     mode: str = "RenderQuantV1",
+    side: str = "long",
+    signal_tag: str = "",
+    timeframe_secs: int = _DEFAULT_TIMEFRAME_SECS,
+    candle_ts: float | None = None,
 ) -> dict:
     """
     Consulta o Claude Fable 5.1 via Mirai API como Árbitro de Convicção.
     Retorno garantido sem exceção:
-    {"aprovado": bool, "conviccao": float, "motivo": str, "origem": "ia" | "fallback" | "bypass"}
+    {"aprovado": bool, "conviccao": float, "motivo": str, "origem": "ia" | "fail_closed" | "bypass"}
     """
     s = get_state()
 
@@ -128,114 +159,170 @@ def consult_ai_guardian(
             "origem": "bypass",
         }
 
-    # 2. Cache por vela: reaproveita veredicto recente da mesma vela sem travar o loop
+    # 2. Cache alinhado à vela + deduplicação concorrente in-flight
+    tf_secs = max(int(timeframe_secs or _DEFAULT_TIMEFRAME_SECS), 60)
     now = time.time()
-    cached = _ENTRY_VERDICT_CACHE.get(pair)
-    if cached is not None:
-        cached_ts, cached_verdict = cached
-        if (now - cached_ts) < 600.0:
-            return cached_verdict
+    ref_ts = float(candle_ts) if candle_ts is not None else now
+    candle_bucket = int(ref_ts // tf_secs)
+    cache_key = (pair, mode, side, candle_bucket, str(signal_tag or ""))
 
-    # Prompt estruturado para retorno estrito em JSON
-    prompt_content = (
-        "Você é o Chief Risk Officer AI (Guardião de Risco Cognitivo) de um fundo quantitativo.\n"
-        "O motor matemático do Freqtrade pré-aprovou uma entrada com as seguintes métricas de mercado:\n\n"
-        f"• Par: {pair}\n"
-        f"• Cotação Atual: {rate}\n"
-        f"• KER (Kaufman Efficiency Ratio): {ker:.4f} (Ruído < 0.35 | Tendência Limpa >= 0.35)\n"
-        f"• ATR Percentual: {atr_pct*100:.2f}%\n"
-        f"• Volume Z-Score (MAD Baleia): {vol_z:.2f}\n"
-        f"• Regime de Mercado: {'BULL EXPANSÃO' if regime_bull else 'LATERAL/CONSOLIDAÇÃO'}\n"
-        f"• Drawdown Diário Atual: {daily_drawdown_pct*100:.2f}%\n"
-        f"• Modo Operacional: {mode}\n\n"
-        "Avalie se este trade tem alta convicção ou se aparenta falso rompimento/exaustão.\n"
-        "RESPONDA ESTRITAMENTE EM JSON VÁLIDO no seguinte formato (sem texto antes ou depois):\n"
-        '{"aprovado": true, "conviccao": 0.80, "motivo": "Justificativa analítica concisa em até 20 palavras"}'
-    )
+    is_leader = False
+    in_flight_ev: threading.Event | None = None
 
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt_content}],
-        "temperature": 0.1,
-        "max_tokens": 150,
-    }
-
-    err_msg = "Resposta não contém JSON válido"
+    while True:
+        with _CACHE_LOCK:
+            _prune_cache_locked(now, tf_secs)
+            cached = _ENTRY_VERDICT_CACHE.get(cache_key)
+            if cached is not None:
+                cached_ts, cached_verdict = cached
+                if (now - cached_ts) < tf_secs:
+                    return dict(cached_verdict)
+            existing_ev = _IN_FLIGHT_EVENTS.get(cache_key)
+            if existing_ev is None:
+                in_flight_ev = threading.Event()
+                _IN_FLIGHT_EVENTS[cache_key] = in_flight_ev
+                is_leader = True
+                break
+        # Outra thread já está consultando exatamente a mesma chave; aguarda fora do lock
+        existing_ev.wait(timeout=5.0)
+        now = time.time()
+        # Ao acordar, verifica se o líder populou o cache; se falhou (fail_closed), assume liderança ou tenta novamente
+        with _CACHE_LOCK:
+            cached = _ENTRY_VERDICT_CACHE.get(cache_key)
+            if cached is not None:
+                return dict(cached[1])
+            if cache_key not in _IN_FLIGHT_EVENTS:
+                in_flight_ev = threading.Event()
+                _IN_FLIGHT_EVENTS[cache_key] = in_flight_ev
+                is_leader = True
+                break
 
     try:
-        resp = requests.post(
-            endpoint,
-            json=payload,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {api_key}",
-                "User-Agent": "Freqtrade-AIGuardian/1.0",
-            },
-            timeout=3.5,
+        # Prompt estruturado para retorno estrito em JSON
+        prompt_content = (
+            "Você é o Chief Risk Officer AI (Guardião de Risco Cognitivo) de um fundo quantitativo.\n"
+            "O motor matemático do Freqtrade pré-aprovou uma entrada com as seguintes métricas de mercado:\n\n"
+            f"• Par: {pair}\n"
+            f"• Lado: {side} | Sinal: {signal_tag or 'N/A'}\n"
+            f"• Cotação Atual: {rate}\n"
+            f"• KER (Kaufman Efficiency Ratio): {ker:.4f} (Ruído < 0.35 | Tendência Limpa >= 0.35)\n"
+            f"• ATR Percentual: {atr_pct*100:.2f}%\n"
+            f"• Volume Z-Score (MAD Baleia): {vol_z:.2f}\n"
+            f"• Regime de Mercado: {'BULL EXPANSÃO' if regime_bull else 'LATERAL/CONSOLIDAÇÃO'}\n"
+            f"• Drawdown Diário Atual: {daily_drawdown_pct*100:.2f}%\n"
+            f"• Modo Operacional: {mode}\n\n"
+            "Avalie se este trade tem alta convicção ou se aparenta falso rompimento/exaustão.\n"
+            "RESPONDA ESTRITAMENTE EM JSON VÁLIDO no seguinte formato (sem texto antes ou depois):\n"
+            '{"aprovado": true, "conviccao": 0.80, "motivo": "Justificativa analítica concisa em até 20 palavras"}'
         )
-        if resp.status_code == 200:
-            data = resp.json()
-            content = data["choices"][0]["message"]["content"].strip()
 
-            # Extrai o bloco JSON usando regex defensivo
-            json_match = re.search(r"\{.*\}", content, re.DOTALL)
-            if json_match:
-                parsed = json.loads(json_match.group(0))
-                aprovado_ia = bool(parsed.get("aprovado", True))
-                conviccao = float(parsed.get("conviccao", 0.70))
-                motivo = str(parsed.get("motivo", "Aprovado por confluência"))
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt_content}],
+            "temperature": 0.1,
+            "max_tokens": 150,
+        }
 
-                # Validação contra o patamar de convicção mínima
-                aprovado_final = aprovado_ia and (conviccao >= min_conv)
-                if not aprovado_final:
-                    if not aprovado_ia:
-                        motivo = f"VETO IA: {motivo}"
-                    else:
-                        motivo = f"VETO CONVICÇÃO: {conviccao*100:.0f}% < Mínima {min_conv*100:.0f}% ({motivo})"
+        err_msg = "Resposta não contém JSON válido"
 
-                verdict = {
-                    "aprovado": aprovado_final,
-                    "conviccao": round(conviccao, 2),
-                    "motivo": motivo,
-                    "origem": "ia",
-                    "pair": pair,
-                    "ts": time.strftime("%H:%M:%S UTC"),
-                }
-
-                # Atualiza métricas
-                s["total_queries"] = s.get("total_queries", 0) + 1
-                if aprovado_final:
-                    s["total_approvals"] = s.get("total_approvals", 0) + 1
+        try:
+            resp = requests.post(
+                endpoint,
+                json=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {api_key}",
+                    "User-Agent": "Freqtrade-AIGuardian/1.0",
+                },
+                timeout=(2.0, 2.5),
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                choices = data.get("choices") if isinstance(data, dict) else None
+                if not isinstance(choices, list) or not choices:
+                    err_msg = "Resposta 200 sem lista 'choices' válida"
                 else:
-                    s["total_vetoes"] = s.get("total_vetoes", 0) + 1
-                s["last_verdict"] = verdict
-                update_state(**s)
-                _ENTRY_VERDICT_CACHE[pair] = (time.time(), verdict)
-                return verdict
+                    msg_obj = choices[0].get("message", {}) if isinstance(choices[0], dict) else {}
+                    content = str(msg_obj.get("content", "")).strip()
+
+                    # Extrai o bloco JSON usando regex defensivo
+                    json_match = re.search(r"\{.*\}", content, re.DOTALL)
+                    if json_match:
+                        parsed = json.loads(json_match.group(0))
+                        if not isinstance(parsed, dict) or "aprovado" not in parsed or "conviccao" not in parsed:
+                            err_msg = "JSON sem campos obrigatórios ('aprovado', 'conviccao')"
+                        elif not isinstance(parsed["aprovado"], bool):
+                            err_msg = "Campo 'aprovado' não é booleano"
+                        else:
+                            aprovado_ia = parsed["aprovado"]
+                            conviccao = float(parsed["conviccao"])
+                            if not (0.0 <= conviccao <= 1.0):
+                                err_msg = f"Convicção fora do intervalo [0,1]: {conviccao}"
+                            else:
+                                motivo = str(parsed.get("motivo", "Aprovado por confluência"))
+
+                                # Validação contra o patamar de convicção mínima
+                                aprovado_final = aprovado_ia and (conviccao >= min_conv)
+                                if not aprovado_final:
+                                    if not aprovado_ia:
+                                        motivo = f"VETO IA: {motivo}"
+                                    else:
+                                        motivo = f"VETO CONVICÇÃO: {conviccao*100:.0f}% < Mínima {min_conv*100:.0f}% ({motivo})"
+
+                                verdict = {
+                                    "aprovado": aprovado_final,
+                                    "conviccao": round(conviccao, 2),
+                                    "motivo": motivo,
+                                    "origem": "ia",
+                                    "pair": pair,
+                                    "mode": mode,
+                                    "candle_bucket": candle_bucket,
+                                    "ts": time.strftime("%H:%M:%S UTC"),
+                                }
+
+                                # Atualiza métricas
+                                s["total_queries"] = s.get("total_queries", 0) + 1
+                                if aprovado_final:
+                                    s["total_approvals"] = s.get("total_approvals", 0) + 1
+                                else:
+                                    s["total_vetoes"] = s.get("total_vetoes", 0) + 1
+                                s["last_verdict"] = verdict
+                                update_state(**s)
+                                with _CACHE_LOCK:
+                                    _prune_cache_locked(time.time(), tf_secs)
+                                    _ENTRY_VERDICT_CACHE[cache_key] = (time.time(), verdict)
+                                return dict(verdict)
+                    else:
+                        err_msg = f"Resposta 200 não contém JSON válido: {content[:80]}"
+
             else:
-                err_msg = f"Resposta 200 não contém JSON válido: {content[:80]}"
+                err_msg = f"HTTP {resp.status_code}"
+        except requests.RequestException as e:
+            logger.warning("[AI GUARDIAN FAIL-CLOSED] Timeout/Rede (%s) -> Veto preventivo", e)
+            err_msg = f"Timeout/Rede na API ({e})"
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[AI GUARDIAN FAIL-CLOSED] Exceção na consulta (%s) -> Veto preventivo", exc)
+            err_msg = f"Erro na API ({exc})"
 
-        else:
-            err_msg = f"HTTP {resp.status_code}"
-    except requests.RequestException as e:
-        logger.warning("[AI GUARDIAN FAIL-CLOSED] Timeout/Rede (%s) -> Veto preventivo", e)
-        err_msg = f"Timeout/Rede na API ({e})"
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("[AI GUARDIAN FAIL-CLOSED] Exceção na consulta (%s) -> Veto preventivo", exc)
-        err_msg = f"Erro na API ({exc})"
-
-    # Fail-Closed institucional: se a IA estiver ativa mas a chamada falhar, veta preventivamente
-    verdict = {
-        "aprovado": False,
-        "conviccao": 0.0,
-        "motivo": f"Fail-closed: {err_msg}",
-        "origem": "fail_closed",
-        "pair": pair,
-        "ts": time.strftime("%H:%M:%S UTC"),
-    }
-    update_state(last_verdict=verdict)
-    _ENTRY_VERDICT_CACHE[pair] = (time.time(), verdict)
-    return verdict
+        # Fail-Closed institucional: se a IA estiver ativa mas a chamada falhar, veta preventivamente.
+        # IMPORTANTE: respostas fail_closed NUNCA são cacheadas, permitindo recuperação imediata na próxima tentativa.
+        verdict = {
+            "aprovado": False,
+            "conviccao": 0.0,
+            "motivo": f"Fail-closed: {err_msg}",
+            "origem": "fail_closed",
+            "pair": pair,
+            "mode": mode,
+            "candle_bucket": candle_bucket,
+            "ts": time.strftime("%H:%M:%S UTC"),
+        }
+        update_state(last_verdict=verdict)
+        return verdict
+    finally:
+        if is_leader and in_flight_ev is not None:
+            with _CACHE_LOCK:
+                _IN_FLIGHT_EVENTS.pop(cache_key, None)
+                in_flight_ev.set()
 
 
 def consult_ai_exit(
@@ -291,7 +378,7 @@ def consult_ai_exit(
                 "Authorization": f"Bearer {api_key}",
                 "User-Agent": "Freqtrade-AIGuardian/1.0",
             },
-            timeout=3.5,
+            timeout=(2.0, 2.5),
         )
         if resp.status_code == 200:
             data = resp.json()

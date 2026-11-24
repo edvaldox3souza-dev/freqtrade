@@ -205,21 +205,26 @@ class RenderQuantV3_Defensive(IStrategy):
         proposed_stake: float, min_stake: float | None, max_stake: float,
         leverage: float, entry_tag: str | None, side: str, **kwargs: Any,
     ) -> float:
-        """Risk parity: 1% da banca por trade, cap 10% (identico ao backtest vencedor), com fallback seguro para ordermin."""
+        """Risk parity: 1% da banca por trade, cap 10%, com reserva de taxas e veto estrito se min_stake violar risco."""
+        if not np.isfinite(max_stake) or max_stake <= 0:
+            return 0.0
         total_wallet = max(float(max_stake), float(proposed_stake), 0.0)
-        if self.wallets is not None:
+        wallets = getattr(self, "wallets", None)
+        if wallets is not None:
             try:
-                total_wallet = float(self.wallets.get_total_stake_amount())
+                total_wallet = float(wallets.get_total_stake_amount())
             except Exception as exc:  # noqa: BLE001
                 logger.debug("V3: fallback wallet balance: %s", exc)
         stop_d = 0.05 + 0.0062  # stop 5% + round-trip estimado
-        stake = min((total_wallet * 0.01) / stop_d, total_wallet * 0.10, float(max_stake))
+        fee_buffer_pct = 0.0062
+        effective_max_stake = float(max_stake) * (1.0 - fee_buffer_pct)
+        stake = min((total_wallet * 0.01) / stop_d, total_wallet * 0.10, effective_max_stake)
         if min_stake is not None and stake < float(min_stake):
-            # Se a carteira cobre a ordem mínima da corretora, permite stake = min_stake
-            if float(min_stake) <= total_wallet:
-                stake = float(min_stake)
-            else:
-                return 0.0
+            logger.warning(
+                "V3 [RISK VETO]: Ordem em %s recusada – min_stake ($%.2f) excede teto aprovado ($%.2f | banca=$%.2f).",
+                pair, float(min_stake), stake, total_wallet,
+            )
+            return 0.0
         if not np.isfinite(stake) or stake <= 0:
             return 0.0
         return round(float(stake), 8)
@@ -244,9 +249,10 @@ class RenderQuantV3_Defensive(IStrategy):
                 if r and hasattr(t, "calc_profit_abs"):
                     unreal += float(t.calc_profit_abs(r))
             total_balance = 1000.0
-            if self.wallets is not None:
+            wallets = getattr(self, "wallets", None)
+            if wallets is not None:
                 try:
-                    total_balance = float(self.wallets.get_total_stake_amount())
+                    total_balance = float(wallets.get_total_stake_amount())
                 except Exception as exc:  # noqa: BLE001
                     logger.debug("V3: fallback balance: %s", exc)
             daily_dd = (realized + unreal) / max(total_balance, 10.0)
@@ -303,10 +309,11 @@ class RenderQuantV3_Defensive(IStrategy):
         current_profit: float, **kwargs: Any,
     ) -> str | bool | None:
         """Take-profit objetivo por ATR (1.5x), como no backtest vencedor."""
-        if self.dp is None:
+        dp = getattr(self, "dp", None)
+        if dp is None:
             return None
         try:
-            df, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+            df, _ = dp.get_analyzed_dataframe(pair, self.timeframe)
             if df is None or df.empty:
                 return None
             atr_pct = float(df["atr_pct"].iloc[-1] or 0.015)
