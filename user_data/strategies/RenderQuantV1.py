@@ -381,6 +381,27 @@ class RenderQuantV1(IStrategy):
             rm_str = str(getattr(runmode, "value", runmode)).lower() if runmode is not None else "live"
             is_operational_mode = rm_str in ("live", "dry_run")
 
+            if is_operational_mode and not dataframe.empty:
+                last_row = dataframe.iloc[-1]
+                pair_name = str(metadata.get("pair", ""))
+                has_sig = bool(last_row.get("enter_long", 0) == 1)
+                if not hasattr(self, "_last_v1_scan_log"):
+                    self._last_v1_scan_log: dict[str, float] = {}
+                now_scan = time.time()
+                if (now_scan - self._last_v1_scan_log.get(pair_name, 0.0)) >= 60.0 or has_sig:
+                    self._last_v1_scan_log[pair_name] = now_scan
+                    minervini_last = bool(minervini_ok.iloc[-1]) if len(minervini_ok) else False
+                    logger.info(
+                        "RenderQuant [V1 SCAN]: %s | close=%.4f | Minervini=%s | KER=%.2f | RSI=%.1f | vol24h=$%.0f | sinal=%s",
+                        pair_name,
+                        float(last_row.get("close", 0.0)),
+                        minervini_last,
+                        float(last_row.get("ker", 0.0)),
+                        float(last_row.get("rsi", 50.0)),
+                        float(last_row.get("volume_usd_24h", 0.0)),
+                        has_sig,
+                    )
+
             if is_operational_mode and not dataframe.empty and dataframe["enter_long"].iloc[-1] == 1:
                 from user_data.ai_guardian import enqueue_ai_pre_evaluation
                 last_row = dataframe.iloc[-1]
@@ -826,22 +847,47 @@ class RenderQuantV1(IStrategy):
         effective_max_stake = float(max_stake) * (1.0 - fee_buffer_pct)
         cap = min(calculated_stake, total_wallet * active_stake_ratio, effective_max_stake)
 
-        # 4d. Trava estrita de min_stake da corretora (Regra 1 - Sem exceção que viole risco aprovado)
-        # Se o lote mínimo da corretora exceder o cap de risco/exposição ou o saldo livre pós-taxas,
-        # a estratégia DEVE recusar a operação explicitamente.
+        # 4d. Trava estrita de min_stake com adequação controlada para micro-banca (< $50)
+        # Só permite adequar ao mínimo da Kraken quando TODAS as travas forem respeitadas:
+        # 1) Há saldo livre pós-taxas suficiente (f_min_stake <= effective_max_stake);
+        # 2) Alocação <= 28% da micro-banca por ativo (permite diversificação e folga);
+        # 3) Perda financeira estimada no stoploss estressado <= 1.5% da banca total.
         if min_stake is not None and cap < float(min_stake):
             f_min_stake = float(min_stake)
-            logger.warning(
-                "RenderQuant [RISK VETO]: Ordem em %s recusada – min_stake ($%.2f) excede o teto de risco/exposição "
-                "aprovado ($%.2f | cap=%.0f%% de $%.2f | max_stake pós-taxas=$%.2f).",
-                pair,
-                f_min_stake,
-                cap,
-                active_stake_ratio * 100.0,
-                total_wallet,
-                effective_max_stake,
-            )
-            return 0.0
+            max_micro_slot = total_wallet * 0.28
+            est_stop_loss_usd = f_min_stake * stressed_dist_pct
+            max_stop_loss_usd = total_wallet * 0.015
+
+            if (
+                total_wallet < 50.0
+                and f_min_stake <= effective_max_stake
+                and f_min_stake <= max_micro_slot
+                and est_stop_loss_usd <= max_stop_loss_usd
+            ):
+                logger.info(
+                    "RenderQuant [MICRO-STAKE RISK-BOUNDED]: %s ajustado para lote mínimo Kraken $%.2f "
+                    "(%.1f%% da banca $%.2f | perda est. stop=$%.2f = %.2f%% <= 1.50%%).",
+                    pair,
+                    f_min_stake,
+                    (f_min_stake / max(total_wallet, 1e-9)) * 100.0,
+                    total_wallet,
+                    est_stop_loss_usd,
+                    (est_stop_loss_usd / max(total_wallet, 1e-9)) * 100.0,
+                )
+                cap = f_min_stake
+            else:
+                logger.warning(
+                    "RenderQuant [RISK VETO]: Ordem em %s recusada – min_stake ($%.2f) excede o limite aprovado "
+                    "(cap=$%.2f | slot_micro=$%.2f | perda_stop=$%.2f vs máx=$%.2f | banca=$%.2f).",
+                    pair,
+                    f_min_stake,
+                    cap,
+                    max_micro_slot,
+                    est_stop_loss_usd,
+                    max_stop_loss_usd,
+                    total_wallet,
+                )
+                return 0.0
 
         if not np.isfinite(cap) or cap <= 0:
             return 0.0

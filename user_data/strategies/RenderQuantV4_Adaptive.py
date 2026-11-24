@@ -319,11 +319,27 @@ class RenderQuantV4_Adaptive(IStrategy):
         effective_max_stake = float(max_stake) * (1.0 - fee_buffer_pct)
         stake = min((total_wallet * 0.01) / stop_d, total_wallet * 0.10, effective_max_stake)
         if min_stake is not None and stake < float(min_stake):
-            logger.warning(
-                "V4 [RISK VETO]: Ordem em %s recusada – min_stake ($%.2f) excede teto aprovado ($%.2f | banca=$%.2f).",
-                pair, float(min_stake), stake, total_wallet,
-            )
-            return 0.0
+            f_min_stake = float(min_stake)
+            max_micro_slot = total_wallet * 0.28
+            est_stop_loss_usd = f_min_stake * stop_d
+            max_stop_loss_usd = total_wallet * 0.015
+            if (
+                total_wallet < 50.0
+                and f_min_stake <= effective_max_stake
+                and f_min_stake <= max_micro_slot
+                and est_stop_loss_usd <= max_stop_loss_usd
+            ):
+                logger.info(
+                    "V4 [MICRO-STAKE RISK-BOUNDED]: %s ajustado para $%.2f (perda stop=$%.2f <= 1.50%%).",
+                    pair, f_min_stake, est_stop_loss_usd,
+                )
+                stake = f_min_stake
+            else:
+                logger.warning(
+                    "V4 [RISK VETO]: Ordem em %s recusada – min_stake ($%.2f) excede teto aprovado ($%.2f | banca=$%.2f).",
+                    pair, f_min_stake, stake, total_wallet,
+                )
+                return 0.0
         if not np.isfinite(stake) or stake <= 0:
             return 0.0
         return round(float(stake), 8)
