@@ -239,6 +239,30 @@ class RenderQuantV4_Adaptive(IStrategy):
         except Exception as exc:
             logger.debug("Falha ao gravar telemetria why_state: %s", exc)
 
+        # Pré-avaliação assíncrona não bloqueante para o Guardião IA (Fase 3.2)
+        try:
+            if not dataframe.empty and "enter_long" in dataframe.columns and dataframe["enter_long"].iloc[-1] == 1:
+                from user_data.ai_guardian import enqueue_ai_pre_evaluation
+                last_row = dataframe.iloc[-1]
+                candle_dt = last_row.get("date")
+                c_ts = candle_dt.timestamp() if hasattr(candle_dt, "timestamp") else None
+                enqueue_ai_pre_evaluation(
+                    pair=str(metadata.get("pair", "")),
+                    rate=float(last_row.get("close", 0.0)),
+                    ker=0.50,
+                    atr_pct=float(last_row.get("atr_pct", 0.02)),
+                    vol_z=1.0,
+                    regime_bull=True,
+                    daily_drawdown_pct=0.0,
+                    mode="RenderQuantV4_Adaptive",
+                    side="long",
+                    signal_tag=str(last_row.get("enter_tag", "V4:entry")),
+                    timeframe_secs=14400,
+                    candle_ts=c_ts,
+                )
+        except Exception as exc:
+            logger.debug("V4: pré-avaliação IA ignorada: %s", exc)
+
         return dataframe
 
     def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
@@ -337,18 +361,22 @@ class RenderQuantV4_Adaptive(IStrategy):
                 logger.warning("V4 [HEAT VETO]: heat projetado acima de %.2f%% - %s vetada", max_heat * 100, pair)
                 return False
 
-            # Gatekeeper Cognitivo AI Guardian (Claude Fable via Mirai API)
+            # Gatekeeper Cognitivo AI Guardian O(1) Não Bloqueante (Fase 3.2)
             try:
-                from user_data.ai_guardian import consult_ai_guardian, get_state
+                from user_data.ai_guardian import get_or_enqueue_ai_verdict, get_state
                 s_ai = get_state()
                 if s_ai.get("enabled", False):
                     atr_val = 0.02
+                    c_ts = None
                     dp = getattr(self, "dp", None)
                     if dp is not None:
                         df, _ = dp.get_analyzed_dataframe(pair, self.timeframe)
                         if df is not None and not df.empty:
                             atr_val = float(df["atr_pct"].iloc[-1] or 0.02)
-                    verdict = consult_ai_guardian(
+                            candle_dt = df.iloc[-1].get("date")
+                            if hasattr(candle_dt, "timestamp"):
+                                c_ts = candle_dt.timestamp()
+                    verdict = get_or_enqueue_ai_verdict(
                         pair=pair,
                         rate=rate,
                         ker=0.50,
@@ -357,6 +385,10 @@ class RenderQuantV4_Adaptive(IStrategy):
                         regime_bull=True,
                         daily_drawdown_pct=daily_dd,
                         mode="RenderQuantV4_Adaptive",
+                        side=side,
+                        signal_tag=str(entry_tag or ""),
+                        timeframe_secs=14400,
+                        candle_ts=c_ts,
                     )
                     # Telemetria de Shadow Trading no Neon PostgreSQL para melhoria contínua das estratégias
                     try:

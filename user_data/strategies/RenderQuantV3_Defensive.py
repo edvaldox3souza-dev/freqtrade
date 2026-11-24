@@ -169,8 +169,27 @@ class RenderQuantV3_Defensive(IStrategy):
         try:
             if metadata and "pair" in metadata:
                 self._record_telemetry(dataframe, str(metadata.get("pair", "")))
+            if not dataframe.empty and dataframe["enter_long"].iloc[-1] == 1:
+                from user_data.ai_guardian import enqueue_ai_pre_evaluation
+                last_row = dataframe.iloc[-1]
+                candle_dt = last_row.get("date")
+                c_ts = candle_dt.timestamp() if hasattr(candle_dt, "timestamp") else None
+                enqueue_ai_pre_evaluation(
+                    pair=str(metadata.get("pair", "")),
+                    rate=float(last_row.get("close", 0.0)),
+                    ker=0.45,
+                    atr_pct=float(last_row.get("atr_pct", 0.02)),
+                    vol_z=1.0,
+                    regime_bull=True,
+                    daily_drawdown_pct=0.0,
+                    mode="RenderQuantV3_Defensive",
+                    side="long",
+                    signal_tag=str(last_row.get("enter_tag", "V3:defensive_mr")),
+                    timeframe_secs=14400,
+                    candle_ts=c_ts,
+                )
         except Exception as exc:  # noqa: BLE001
-            logger.debug("V3: telemetria debug: %s", exc)
+            logger.debug("V3: telemetria/pré-avaliação debug: %s", exc)
         return dataframe
 
     def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
@@ -272,18 +291,22 @@ class RenderQuantV3_Defensive(IStrategy):
                 logger.warning("V3 [HEAT VETO]: heat projetado acima de %.2f%% - %s vetada", max_heat * 100, pair)
                 return False
 
-            # Gatekeeper Cognitivo AI Guardian (Claude Fable via Mirai API)
+            # Gatekeeper Cognitivo AI Guardian O(1) Não Bloqueante (Fase 3.2)
             try:
-                from user_data.ai_guardian import consult_ai_guardian, get_state
+                from user_data.ai_guardian import get_or_enqueue_ai_verdict, get_state
                 s_ai = get_state()
                 if s_ai.get("enabled", False):
                     atr_val = 0.02
+                    c_ts = None
                     dp = getattr(self, "dp", None)
                     if dp is not None:
                         df, _ = dp.get_analyzed_dataframe(pair, self.timeframe)
                         if df is not None and not df.empty:
                             atr_val = float(df["atr_pct"].iloc[-1] or 0.02)
-                    verdict = consult_ai_guardian(
+                            candle_dt = df.iloc[-1].get("date")
+                            if hasattr(candle_dt, "timestamp"):
+                                c_ts = candle_dt.timestamp()
+                    verdict = get_or_enqueue_ai_verdict(
                         pair=pair,
                         rate=rate,
                         ker=0.45,
@@ -292,8 +315,12 @@ class RenderQuantV3_Defensive(IStrategy):
                         regime_bull=True,
                         daily_drawdown_pct=daily_dd,
                         mode="RenderQuantV3_Defensive",
+                        side=side,
+                        signal_tag=str(entry_tag or ""),
+                        timeframe_secs=14400,
+                        candle_ts=c_ts,
                     )
-                    if not verdict.get("aprovado", True):
+                    if not verdict.get("aprovado", False):
                         logger.warning("V3 [AI GUARDIAN VETO]: entrada em %s vetada pela IA: %s", pair, verdict.get("motivo"))
                         return False
                     logger.info("V3 [AI GUARDIAN PASS]: entrada em %s aprovada pela IA (%.0f%% | %s)", pair, verdict.get("conviccao", 0.70) * 100, verdict.get("motivo"))

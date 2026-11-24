@@ -372,6 +372,30 @@ class RenderQuantV1(IStrategy):
         else:
             dataframe.loc[entry_conditions, "enter_tag"] = "V1:equilibrada_pullback"
 
+        # Pré-avaliação assíncrona não bloqueante para o Guardião IA (Fase 3.2)
+        try:
+            if not dataframe.empty and dataframe["enter_long"].iloc[-1] == 1:
+                from user_data.ai_guardian import enqueue_ai_pre_evaluation
+                last_row = dataframe.iloc[-1]
+                candle_dt = last_row.get("date")
+                c_ts = candle_dt.timestamp() if hasattr(candle_dt, "timestamp") else None
+                enqueue_ai_pre_evaluation(
+                    pair=str(metadata.get("pair", "")),
+                    rate=float(last_row.get("close", 0.0)),
+                    ker=float(last_row.get("ker", 0.40)),
+                    atr_pct=float(last_row.get("atr_pct", 0.018)),
+                    vol_z=float(last_row.get("vol_modified_z", 1.0)),
+                    regime_bull=bool(last_row.get("market_regime_bull", True)),
+                    daily_drawdown_pct=0.0,
+                    mode=self._get_active_strategy_mode(),
+                    side="long",
+                    signal_tag=str(last_row.get("enter_tag", "")),
+                    timeframe_secs=900,
+                    candle_ts=c_ts,
+                )
+        except Exception as exc:
+            logger.debug("RenderQuant: pré-avaliação IA ignorada: %s", exc)
+
         return dataframe
 
     def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
@@ -593,15 +617,16 @@ class RenderQuantV1(IStrategy):
             self._record_decision(pair, "REJECT", f"Falha na avalia??o de risco/heat: {exc}")
             return False
 
-        # 4. Gatekeeper Cognitivo AI Guardian (Mirai API / Claude Fable 5.1 - Claude Fable 5.1)
+        # 4. Gatekeeper Cognitivo AI Guardian O(1) Não Bloqueante (Fase 3.2)
         try:
-            from user_data.ai_guardian import consult_ai_guardian, get_state
+            from user_data.ai_guardian import get_or_enqueue_ai_verdict, get_state
             ai_state = get_state()
             if ai_state.get("enabled", False):
                 ker_val = 0.40
                 atr_val = 0.018
                 vol_z_val = 1.0
                 regime_bull_val = True
+                c_ts = None
                 dp = getattr(self, "dp", None)
                 if dp is not None:
                     dataframe, _ = dp.get_analyzed_dataframe(pair, self.timeframe)
@@ -611,8 +636,11 @@ class RenderQuantV1(IStrategy):
                         atr_val = float(last_row.get("atr_pct", 0.018))
                         vol_z_val = float(last_row.get("vol_modified_z", 1.0))
                         regime_bull_val = bool(last_row.get("market_regime_bull", True))
+                        candle_dt = last_row.get("date")
+                        if hasattr(candle_dt, "timestamp"):
+                            c_ts = candle_dt.timestamp()
 
-                verdict = consult_ai_guardian(
+                verdict = get_or_enqueue_ai_verdict(
                     pair=pair,
                     rate=rate,
                     ker=ker_val,
@@ -620,23 +648,27 @@ class RenderQuantV1(IStrategy):
                     vol_z=vol_z_val,
                     regime_bull=regime_bull_val,
                     daily_drawdown_pct=daily_dd_pct if 'daily_dd_pct' in locals() else 0.0,
-                    mode=self._cached_strategy_mode,
+                    mode=self._get_active_strategy_mode(),
+                    side=side,
+                    signal_tag=str(entry_tag or ""),
+                    timeframe_secs=900,
+                    candle_ts=c_ts,
                 )
 
-                if not verdict.get("aprovado", True):
+                if not verdict.get("aprovado", False):
                     motivo_ia = verdict.get("motivo", "Veto emitido pela IA")
                     logger.info("RenderQuant [AI GUARDIAN VETO]: Entrada em %s vetada pela IA: %s", pair, motivo_ia)
                     self._record_decision(pair, "REJECT", f"IA Guardian: {motivo_ia}")
                     return False
 
                 logger.info(
-                    "RenderQuant [AI GUARDIAN PASS]: Entrada em %s aprovada pela IA (Convic??o: %.0f%% | %s)",
+                    "RenderQuant [AI GUARDIAN PASS]: Entrada em %s aprovada pela IA (Convicção: %.0f%% | %s)",
                     pair,
                     verdict.get("conviccao", 0.70) * 100,
                     verdict.get("motivo"),
                 )
         except Exception as exc:
-            logger.debug("RenderQuant: Falha n?o cr?tica na consulta ao AI Guardian: %s", exc)
+            logger.debug("RenderQuant: Falha não crítica na consulta ao AI Guardian: %s", exc)
 
         return True
 

@@ -42,7 +42,7 @@ def test_ai_guardian_veto_blocks_entry():
     mock_verdict = {"aprovado": False, "conviccao": 0.45, "motivo": "VETO: Risco excessivo de exaustão"}
 
     with patch("user_data.ai_guardian.get_state", return_value=mock_state):
-        with patch("user_data.ai_guardian.consult_ai_guardian", return_value=mock_verdict):
+        with patch("user_data.ai_guardian.get_or_enqueue_ai_verdict", return_value=mock_verdict):
             ok = strat.confirm_trade_entry("BTC/USDT", "limit", 0.001, 95000.0, "GTC", datetime.now(), None, "long")
             assert ok is False
 
@@ -56,6 +56,6 @@ def test_ai_guardian_approval_allows_entry():
     mock_verdict = {"aprovado": True, "conviccao": 0.85, "motivo": "Confluência de suporte aprovada"}
 
     with patch("user_data.ai_guardian.get_state", return_value=mock_state):
-        with patch("user_data.ai_guardian.consult_ai_guardian", return_value=mock_verdict):
+        with patch("user_data.ai_guardian.get_or_enqueue_ai_verdict", return_value=mock_verdict):
             ok = strat.confirm_trade_entry("SOL/USDT", "limit", 0.05, 180.0, "GTC", datetime.now(), None, "long")
             assert ok is True

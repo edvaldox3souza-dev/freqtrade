@@ -58,9 +58,9 @@ def test_full_pipeline_v4_entry_gate_and_ai_arbitration():
 
     # 2. Teste do Portão Cognitivo (AI Guardian Gate):
     strat.dp = None  # Sem DataProvider externo no teste unitário
-    # Cenário A: Claude Opus 5.5 aprova a entrada (convicção 82%)
+    # Cenário A: Claude Opus 5.5 aprova a entrada (convicção 82%) via leitura O(1)
     with patch("user_data.ai_guardian.get_state", return_value={"enabled": True}), \
-         patch("user_data.ai_guardian.consult_ai_guardian") as mock_ai:
+         patch("user_data.ai_guardian.get_or_enqueue_ai_verdict") as mock_ai:
         mock_ai.return_value = {
             "aprovado": True,
             "conviccao": 0.82,
@@ -82,7 +82,7 @@ def test_full_pipeline_v4_entry_gate_and_ai_arbitration():
 
     # Cenário B: Claude Opus 5.5 VETA a entrada por risco macro
     with patch("user_data.ai_guardian.get_state", return_value={"enabled": True}), \
-         patch("user_data.ai_guardian.consult_ai_guardian") as mock_ai:
+         patch("user_data.ai_guardian.get_or_enqueue_ai_verdict") as mock_ai:
         mock_ai.return_value = {
             "aprovado": False,
             "conviccao": 0.42,
