@@ -1,4 +1,3 @@
-import json
 import logging
 import pathlib
 import time
@@ -6,6 +5,7 @@ from datetime import UTC, datetime
 from typing import Any, Optional, Union
 
 import numpy as np
+import pandas as pd
 import talib.abstract as ta
 from freqtrade.persistence import Trade
 from freqtrade.strategy import IStrategy
@@ -56,15 +56,16 @@ class RenderQuantV1(IStrategy):
     }
 
     use_exit_signal: bool = True
-    exit_profit_only: bool = False
+    exit_profit_only: bool = True
+    exit_profit_min: float = 0.010
     ignore_roi_if_entry_signal: bool = False
 
     # Par?metros de Volatilidade e Momentum
     min_natr: float = 0.20
     max_natr: float = 4.00
     min_adx: float = 16.0
-    rsi_entry_max: float = 48.0
-    rsi_exit_mid: float = 62.0
+    rsi_entry_max: float = 64.0
+    rsi_exit_mid: float = 64.0
     rsi_exit_extreme: float = 74.0
 
     # Risco e Gest?o de Capital (HyperGrok & Maverick)
@@ -78,10 +79,10 @@ class RenderQuantV1(IStrategy):
 
     # Kaufman Efficiency Ratio & Portfolio Heat (Claude Fable 5.1 / Maverick / HyperGrok)
     KER_WINDOW: int = 14
-    KER_MIN_V1: float = 0.35               # Filtro de efici?ncia para modo V1 (veto de chop/ru?do)
-    KER_MIN_V2: float = 0.42               # Filtro de efici?ncia para modo V2 Institucional
+    KER_MIN_V1: float = 0.30               # Filtro de efici?ncia calibrado para modo V1 (Kraken 15m)
+    KER_MIN_V2: float = 0.36               # Filtro de efici?ncia para modo V2 Institucional
     portfolio_heat_limit: float = 0.03     # Hard cap de 3.0% de risco total aberto agregado sobre o equity
-    min_24h_volume_usd: float = 200_000.0   # Mínimo $200k USD/24h calibrado para liquidez real USDT na Kraken Spot
+    min_24h_volume_usd: float = 150_000.0   # Mínimo $150k USD/24h calibrado para liquidez real USDT na Kraken Spot
 
     # Clusters de Correla??o (HyperGrok) - Evita risco direcional duplicado nos 6 pares l?quidos
     CORRELATION_CLUSTERS = {
@@ -215,10 +216,16 @@ class RenderQuantV1(IStrategy):
         bollinger = ta.BBANDS(dataframe, timeperiod=20, nbdevup=2.0, nbdevdn=2.0, matype=0)
         dataframe["bb_lower"] = bollinger["lowerband"]
         dataframe["bb_middle"] = bollinger["middleband"]
+        dataframe["bb_upper"] = bollinger["upperband"]
+        bb_width = (dataframe["bb_upper"] - dataframe["bb_lower"]).replace(0.0, np.nan)
+        dataframe["bb_pos"] = (
+            ((close - dataframe["bb_lower"]) / bb_width).clip(-0.5, 1.5).fillna(0.5).astype(np.float32)
+        )
 
         macd_res = ta.MACD(dataframe, fastperiod=12, slowperiod=26, signalperiod=9)
         dataframe["macd"] = macd_res["macd"]
         dataframe["macd_signal"] = macd_res["macdsignal"]
+        dataframe["macd_hist"] = dataframe["macd"] - dataframe["macd_signal"]
 
         # 3. Modified Z-Score de Volume via MAD (Trading Skills - Prote??o Fail-Closed SRE)
         rolling_vol = vol.rolling(window=72)
@@ -282,97 +289,112 @@ class RenderQuantV1(IStrategy):
         is_v2 = (mode == "RenderQuantV2_Institutional")
 
         close = dataframe["close"]
-        low = dataframe["low"]
-        r1 = dataframe["pivot_r1"]
-        p = dataframe["pivot_p"]
-        s1 = dataframe["pivot_s1"]
+        open_p = dataframe["open"] if "open" in dataframe.columns else close
+        low = dataframe["low"] if "low" in dataframe.columns else close
+        r1 = dataframe["pivot_r1"] if "pivot_r1" in dataframe.columns else close * 1.05
+        p = dataframe["pivot_p"] if "pivot_p" in dataframe.columns else close
+        s1 = dataframe["pivot_s1"] if "pivot_s1" in dataframe.columns else close * 0.95
 
-        # 1. Filtro Minervini: ativo em est?gio 2 de expans?o saud?vel
-        minervini_ok = (
-            (close > dataframe["sma50"])
-            & (dataframe["sma50"] > dataframe["sma150"])
-            & (dataframe["sma150"] > dataframe["sma200"])
-            & (dataframe["sma200_slope"] == 1)
+        if "bb_pos" in dataframe.columns:
+            bb_pos = dataframe["bb_pos"]
+        elif "bb_upper" in dataframe.columns and "bb_lower" in dataframe.columns:
+            bb_w = (dataframe["bb_upper"] - dataframe["bb_lower"]).replace(0.0, np.nan)
+            bb_pos = ((close - dataframe["bb_lower"]) / bb_w).clip(-0.5, 1.5).fillna(0.5)
+        else:
+            bb_pos = (close * 0.0 + 0.5)
+
+        macd_hist = (
+            dataframe["macd_hist"]
+            if "macd_hist" in dataframe.columns
+            else (dataframe["macd"] - dataframe["macd_signal"])
         )
 
-        # 2. Filtro Anti-Chasing: n?o comprar em rompimento esticado sem reteste
+        # Confirmação compradora da vela: evita comprar faca caindo sem rejeição
+        is_green = close > open_p
+        active_ker_min = self.KER_MIN_V2 if is_v2 else self.KER_MIN_V1
+        natr_ok = (dataframe["natr"] >= self.min_natr) & (dataframe["natr"] <= self.max_natr)
+        ker_ok = dataframe["ker"] >= active_ker_min
+        liquidity_ok = dataframe["volume_usd_24h"] >= self.min_24h_volume_usd
         chase_risk = (close > r1) & (low.shift(1) > r1)
+        not_stretched = (dataframe["stretch_atr"] <= 1.5) if "stretch_atr" in dataframe.columns else True
 
-        # 3. Pullback estrutural diferenciado por modo (V2 institucional exige maior rigor geom?trico)
+        # Ramo 1: Retomada de Momentum em Tendência (elimina contradição dual_bullish + RSI <= 48)
+        trend_rsi_max = 60.0 if is_v2 else self.rsi_entry_max
+        trend_mom = (
+            (close > dataframe["sma200"])
+            & (dataframe["ema9"] > dataframe["ema21"])
+            & (macd_hist > 0)
+            & (macd_hist > macd_hist.shift(1))
+            & (dataframe["rsi"] <= trend_rsi_max)
+            & ker_ok
+            & natr_ok
+            & (~chase_risk)
+            & not_stretched
+            & is_green
+        )
+
+        # Ramo 2: Pullback Estrutural na EMA21 em Tendência Saudável (SMA50 > SMA200)
+        pull_rsi_max = 54.0 if is_v2 else 58.0
+        pullback_base = (
+            (close > dataframe["sma50"])
+            & (dataframe["sma50"] > dataframe["sma200"])
+            & (low <= dataframe["ema21"] * 1.008)
+            & (close >= dataframe["ema21"] * 0.992)
+            & (dataframe["rsi"] <= pull_rsi_max)
+            & (dataframe["rsi"] > dataframe["rsi"].shift(1))
+            & ker_ok
+            & natr_ok
+            & is_green
+        )
         if is_v2:
-            # V2 Institucional: exige Whale Volume OU proximidade severa (<= 0.8%) de suporte
-            whale_condition = (dataframe["is_whale_vol"] == 1)
-            support_condition = (
-                ((close - p).abs() / p <= 0.008)
-                | ((close - s1).abs() / s1 <= 0.008)
-                | (close <= dataframe["bb_lower"] * 1.004)
-            )
-            near_structural_support = whale_condition | support_condition
-            active_min_adx = 20.0
-            active_rsi_max = 42.0
-        else:
-            # V1 Equilibrada: toler?ncia padr?o (<= 1.5%)
-            near_structural_support = (
-                ((close - p).abs() / p <= 0.015)
-                | ((close - s1).abs() / s1 <= 0.015)
+            support_v2 = (
+                (dataframe["is_whale_vol"] == 1)
+                | ((close - p).abs() / p.replace(0.0, np.nan) <= 0.012)
+                | ((close - s1).abs() / s1.replace(0.0, np.nan) <= 0.012)
                 | (close <= dataframe["bb_lower"] * 1.006)
             )
-            active_min_adx = self.min_adx       # 16.0
-            active_rsi_max = self.rsi_entry_max # 48.0
+            pullback_cond = pullback_base & support_v2
+        else:
+            pullback_cond = pullback_base
 
-        # 4. Regime e Volatilidade
-        regime_ok = (
-            (dataframe["natr"] >= self.min_natr)
+        # Ramo 3: Capitulação Estatística com Confirmação Compradora na Banda Inferior
+        rev_bb_max = 0.02 if is_v2 else 0.04
+        rev_rsi_max = 28.0 if is_v2 else 30.0
+        reversion_cond = (
+            (bb_pos <= rev_bb_max)
+            & (dataframe["rsi"] <= rev_rsi_max)
+            & (dataframe["natr"] >= 0.22)
             & (dataframe["natr"] <= self.max_natr)
-            & (dataframe["adx"] >= active_min_adx)
+            & is_green
         )
 
-        # 5. Momentum e Confirma??o de Retomada
-        momentum_ok = (
-            (dataframe["dual_bullish"] == 1)
-            & (dataframe["dual_conflict"] == 0)
-            & (dataframe["rsi"] <= active_rsi_max)
-            & (dataframe["rsi"] > dataframe["rsi"].shift(1))
-        )
-
-        # 6. Filtro Kaufman Efficiency Ratio (Veto de Chop / Ru?do lateral)
-        active_ker_min = self.KER_MIN_V2 if is_v2 else self.KER_MIN_V1
-        ker_ok = dataframe["ker"] >= active_ker_min
-
-        # 7. Filtro de Liquidez Notional 24h (Elimina slippage em livros rasos - Claude Fable 5.1)
-        liquidity_ok = dataframe["volume_usd_24h"] >= self.min_24h_volume_usd
-
-        # 8. Gatilho de Pullback na EMA21 e Anti-Esticamento (Valida??o Claude Fable 5.1)
-        # O pre?o recua at? perto da EMA21 e sustenta suporte, evitando compras no topo esticado
-        ema21_pullback = (low <= dataframe["ema21"] * 1.006) & (close >= dataframe["ema21"] * 0.992)
-        not_stretched = dataframe["stretch_atr"] <= 1.2
-
-        # Condi??o de Entrada Composta
-        entry_conditions = (
-            minervini_ok
-            & (~chase_risk)
-            & near_structural_support
-            & ema21_pullback
-            & not_stretched
-            & regime_ok
-            & momentum_ok
-            & ker_ok
-            & liquidity_ok
-            & (dataframe["volume"] > 0)
-        )
+        valid_signal = trend_mom | pullback_cond | reversion_cond
+        entry_conditions = valid_signal & liquidity_ok & (dataframe["volume"] > 0)
 
         dataframe.loc[entry_conditions, "enter_long"] = 1
-        # Contrato imut?vel de entrada por trade (R1 Claude Fable 5.1):
+        if "enter_tag" not in dataframe.columns:
+            dataframe["enter_tag"] = ""
+
         if is_v2:
-            dataframe.loc[entry_conditions, "enter_tag"] = np.where(
-                dataframe.loc[entry_conditions, "is_whale_vol"] == 1,
+            v2_pull_tag = np.where(
+                dataframe["is_whale_vol"] == 1,
                 "V2:whale_pullback",
                 "V2:support_pullback",
             )
+            tags = np.select(
+                [pullback_cond, trend_mom, reversion_cond],
+                [v2_pull_tag, "V2:trend_mom", "V2:oversold_reclaim"],
+                default="V2:support_pullback",
+            )
         else:
-            dataframe.loc[entry_conditions, "enter_tag"] = "V1:equilibrada_pullback"
+            tags = np.select(
+                [pullback_cond, trend_mom, reversion_cond],
+                ["V1:equilibrada_pullback", "V1:trend_mom", "V1:oversold_reclaim"],
+                default="V1:equilibrada_pullback",
+            )
+        dataframe.loc[entry_conditions, "enter_tag"] = pd.Series(tags, index=dataframe.index).loc[entry_conditions]
 
-        # Pré-avaliação assíncrona não bloqueante para o Guardião IA (somente live/dry_run)
+        # Pré-avaliação assíncrona não bloqueante e telemetria live/dry_run
         try:
             dp = getattr(self, "dp", None)
             runmode = getattr(dp, "runmode", None) if dp is not None else None
@@ -387,20 +409,54 @@ class RenderQuantV1(IStrategy):
                 has_sig = bool(last_row.get("enter_long", 0) == 1)
                 if not hasattr(self, "_last_v1_scan_log"):
                     self._last_v1_scan_log: dict[str, float] = {}
+                if not hasattr(self, "_why_pairs_cache"):
+                    self._why_pairs_cache: dict[str, dict[str, Any]] = {}
+
+                last_bb_pos = float(bb_pos.iloc[-1]) if len(bb_pos) else 0.5
+                last_rsi = float(last_row.get("rsi", 50.0))
+                last_ker = float(last_row.get("ker", 0.0))
+                last_vol24 = float(last_row.get("volume_usd_24h", 0.0))
+                last_close = float(last_row.get("close", 0.0))
+
+                if pair_name:
+                    self._why_pairs_cache[pair_name] = {
+                        "price": last_close,
+                        "bb_pos": round(last_bb_pos, 4),
+                        "rsi": round(last_rsi, 2),
+                        "ker": round(last_ker, 3),
+                        "vol_usd_24h": round(last_vol24, 0),
+                        "signal": has_sig,
+                    }
+
                 now_scan = time.time()
                 if (now_scan - self._last_v1_scan_log.get(pair_name, 0.0)) >= 60.0 or has_sig:
                     self._last_v1_scan_log[pair_name] = now_scan
-                    minervini_last = bool(minervini_ok.iloc[-1]) if len(minervini_ok) else False
+                    trend_last = bool(trend_mom.iloc[-1] or pullback_cond.iloc[-1]) if len(dataframe) else False
                     logger.info(
-                        "RenderQuant [V1 SCAN]: %s | close=%.4f | Minervini=%s | KER=%.2f | RSI=%.1f | vol24h=$%.0f | sinal=%s",
+                        "RenderQuant [V1 SCAN]: %s | close=%.4f | Trend=%s | BB=%.1f%% | KER=%.2f | RSI=%.1f | vol24h=$%.0f | sinal=%s",
                         pair_name,
-                        float(last_row.get("close", 0.0)),
-                        minervini_last,
-                        float(last_row.get("ker", 0.0)),
-                        float(last_row.get("rsi", 50.0)),
-                        float(last_row.get("volume_usd_24h", 0.0)),
+                        last_close,
+                        trend_last,
+                        last_bb_pos * 100.0,
+                        last_ker,
+                        last_rsi,
+                        last_vol24,
                         has_sig,
                     )
+                    if self._why_pairs_cache:
+                        from user_data.state_store import save_state_async
+                        why_payload = {
+                            "strategy": mode,
+                            "timeframe": self.timeframe,
+                            "bb_pos_target": rev_bb_max,
+                            "updated_at": datetime.now(UTC).strftime("%d/%m/%Y %H:%M UTC"),
+                            "pairs": dict(self._why_pairs_cache),
+                        }
+                        save_state_async(
+                            "why_state",
+                            why_payload,
+                            [self.WHY_STATE_FILE, pathlib.Path("/freqtrade/user_data/why_state.json")],
+                        )
 
             if is_operational_mode and not dataframe.empty and dataframe["enter_long"].iloc[-1] == 1:
                 from user_data.ai_guardian import enqueue_ai_pre_evaluation
@@ -432,15 +488,13 @@ class RenderQuantV1(IStrategy):
 
         close = dataframe["close"]
 
-        # Sa?da por revers?o conclu?da ? m?dia de Bollinger com RSI recuperado
+        # Saída por reversão concluída à média de Bollinger com RSI recuperado (protegida por exit_profit_only)
         take_reversion = (close >= dataframe["bb_middle"]) & (dataframe["rsi"] > self.rsi_exit_mid)
-        # Sa?da por sobrecompra extrema
+        # Saída por sobrecompra extrema (controle de stop em perdas fica a cargo do custom_stoploss / stoploss ATR)
         overbought_exit = dataframe["rsi"] > self.rsi_exit_extreme
-        # Sa?da estrutural preventiva: perda da SMA50
-        structural_exit = close < dataframe["sma50"]
 
         dataframe.loc[
-            (take_reversion | overbought_exit | structural_exit) & (dataframe["volume"] > 0),
+            (take_reversion | overbought_exit) & (dataframe["volume"] > 0),
             "exit_long",
         ] = 1
         return dataframe

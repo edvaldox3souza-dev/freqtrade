@@ -256,7 +256,7 @@ def _execute_ai_http_request(
                 "Authorization": f"Bearer {api_key}",
                 "User-Agent": "Freqtrade-AIGuardian/1.0",
             },
-            timeout=(2.0, 2.5),
+            timeout=(3.0, 8.0),
         )
         latency_ms = (time.perf_counter() - t0) * 1000.0
         with _CACHE_LOCK:

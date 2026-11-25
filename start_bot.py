@@ -2189,36 +2189,42 @@ def install_pt_br_hooks() -> None:
         if state and "pairs" in state and state["pairs"]:
             pairs_dict = state["pairs"]
             strat_name = state.get("strategy", "RenderQuantV3_Defensive")
+            tf_label = state.get("timeframe") or ("4h" if ("V3" in strat_name or "V4" in strat_name) else "15m")
             target_bb = float(state.get("bb_pos_target", 0.12))
             updated_ts = state.get("updated_at", "Recente")
 
             rows = []
             min_pos = 1.0
             for p_name, p_data in sorted(pairs_dict.items()):
-                c = p_data.get("price", 0)
+                c = float(p_data.get("price", 0) or 0)
+                price_fmt = f"${c:,.4f}" if c < 10 else f"${c:,.2f}"
                 pos = p_data.get("bb_pos", 1.0)
                 min_pos = min(min_pos, pos)
                 status = "🔴 Topo" if pos >= 0.60 else ("🟡 Meio" if pos >= 0.25 else "🟢 Fundo")
                 dist = (pos - target_bb) * 100
                 dist_str = f"+{dist:.1f}%" if dist > 0 else f"{dist:.1f}%"
-                rows.append(f"• *{p_name}:* `${c:,.2f}` | BB: `{pos*100:.1f}%` ({status}) | Distância: `{dist_str}`")
+                rsi_txt = f" | RSI `{p_data['rsi']:.1f}`" if "rsi" in p_data else ""
+                rows.append(f"• *{p_name}:* `{price_fmt}` | BB: `{pos*100:.1f}%` ({status}){rsi_txt} | Distância: `{dist_str}`")
 
-            if min_pos < target_bb:
-                diag = f"🟢 *Oportunidade em andamento:* Ao menos uma moeda atingiu a sobrevenda (< {target_bb*100:.1f}%). Motor avaliando compra."
+            if min_pos <= target_bb:
+                diag = f"🟢 *Oportunidade em andamento:* Ao menos uma moeda atingiu a zona (< {target_bb*100:.1f}%). Motor avaliando confluência."
             elif min_pos < 0.25:
-                diag = "🟡 *Retração em curso:* Moeda se aproximando do fundo. Monitorando confluência institucional."
+                diag = "🟡 *Retração em curso:* Moeda se aproximando da banda inferior. Monitorando confluência institucional."
             else:
-                diag = f"🛡️ *Mercado em zona neutra/alta:* Todos os pares transitam acima de 25% de Bollinger. A estratégia V3 aguarda retração na zona de compra (< {target_bb*100:.1f}%) para comprar com proteção de capital."
+                diag = (
+                    f"🛡️ *Mercado em zona neutra/sem gatilho:* Todos os pares transitam acima da faixa de sobrevenda (< {target_bb*100:.1f}%) "
+                    f"ou aguardam retomada de tendência na `{strat_name}`."
+                )
 
             msg = (
                 f"🛡️ *Diagnóstico de Entrada (/why)*\n\n"
-                f"• *Estratégia:* `{strat_name} (4h)`\n"
-                f"• *Gatilho de Compra V3:* `BB_Pos < {target_bb*100:.1f}%` (Fundo de Sobrevenda)\n"
+                f"• *Estratégia:* `{strat_name} ({tf_label})`\n"
+                f"• *Gatilho de Reversão:* `BB_Pos <= {target_bb*100:.1f}%` (+ retomada de tendência/pullback)\n"
                 f"• *Última Telemetria:* `{updated_ts}`\n\n"
                 f"📊 *Posição dos Pares em Tempo Real:*\n"
                 + "\n".join(rows) +
                 f"\n\n🔍 *Diagnóstico Matemático:*\n{diag}\n\n"
-                f"💡 _O bot opera com rigor institucional: compras só acontecem no fundo estatístico das Bandas de Bollinger._"
+                f"💡 _O bot opera com rigor institucional e taxas Kraken cobertas antes de autorizar compras._"
             )
             if target:
                 await target.reply_text(msg, parse_mode="Markdown")
