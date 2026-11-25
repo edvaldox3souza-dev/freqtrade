@@ -326,3 +326,66 @@ def test_btc_macro_guard_allows_early_recovery_and_blocks_dump():
         "ETH/USDT", "limit", 0.002, 1650.0, "gtc", datetime.now(UTC), "V1:early_cross", "long"
     )
     assert ok_rec is True
+
+
+def test_v1_vbottom_reclaim_and_sma50_recovery_bridge():
+    strat = RenderQuantV1()
+    strat.dp = MagicMock()
+    strat.dp.runmode = "backtest"
+
+    # 1. V-bottom reclaim: vela anterior fechou em capitulação extrema (BB -18%, RSI 24),
+    # vela atual fechou verde acima da bb_lower e subindo (RSI 42) -> entra!
+    df_vb = _base_df(3)
+    df_vb["ema9"] = 89.0  # desativa trend/cross
+    df_vb["open"] = [93.0, 91.0, 89.0]
+    df_vb["close"] = [92.0, 88.0, 91.5]
+    df_vb["bb_lower"] = [91.0, 90.0, 90.2]
+    df_vb["bb_pos"] = [0.20, -0.18, 0.15]
+    df_vb["rsi"] = [35.0, 24.0, 42.0]
+    out_vb = strat.populate_entry_trend(df_vb, {"pair": "BTC/USDT"})
+    assert out_vb.loc[2, "enter_long"] == 1
+    assert out_vb.loc[2, "enter_tag"] == "V1:oversold_reclaim"
+
+    # 2. Ponte de recuperação acima da SMA50 crescente (c >= 0.985*sma200, RSI=66, stretch=1.9) -> entra!
+    df_br = _base_df(10)
+    df_br["low"] = 100.8  # fora de pullback EMA21
+    df_br["sma50"] = [97.0 + i * 0.25 for i in range(10)]
+    df_br["sma200"] = 101.2  # close=100.5 >= 0.985 * 101.2 (99.68)
+    df_br["macd_hist"] = [0.05 + i * 0.02 for i in range(10)]
+    df_br["rsi"] = 66.0
+    df_br["stretch_atr"] = 1.9
+    df_br["ema9"] = 100.6
+    df_br["ema21"] = 99.8
+    out_br = strat.populate_entry_trend(df_br, {"pair": "ETH/USDT"})
+    assert out_br.loc[9, "enter_long"] == 1
+    assert out_br.loc[9, "enter_tag"] == "V1:trend_mom"
+
+
+def test_spread_guard_allows_ada_limit_spread_and_blocks_extreme():
+    from datetime import UTC, datetime
+
+    strat = RenderQuantV1()
+    strat.wallets = MagicMock()
+    strat.wallets.get_total_stake_amount.return_value = 100.0
+    strat.wallets.get_available_stake_amount.return_value = 100.0
+    strat.config = {"stake_currency": "USDT", "runmode": "backtest"}
+    strat.dp = MagicMock()
+    strat.dp.runmode = "backtest"
+
+    # Spread 0.166% (típico em ADA $0.1375 no livro Kraken) deve PASSAR para ordem limit (< 0.25%)
+    strat.dp.ticker.return_value = {"bid": 0.1375, "ask": 0.137728}
+    assert (
+        strat.confirm_trade_entry(
+            "ADA/USDT", "limit", 22.0, 0.1375, "gtc", datetime.now(UTC), "V1:oversold_reclaim", "long"
+        )
+        is True
+    )
+
+    # Spread extremo 0.35% (> 0.25%) deve ser VETADO
+    strat.dp.ticker.return_value = {"bid": 0.1375, "ask": 0.1380}
+    assert (
+        strat.confirm_trade_entry(
+            "ADA/USDT", "limit", 22.0, 0.1375, "gtc", datetime.now(UTC), "V1:oversold_reclaim", "long"
+        )
+        is False
+    )

@@ -64,7 +64,7 @@ class RenderQuantV1(IStrategy):
     min_natr: float = 0.20
     max_natr: float = 4.00
     min_adx: float = 16.0
-    rsi_entry_max: float = 64.0
+    rsi_entry_max: float = 68.0
     rsi_exit_mid: float = 64.0
     rsi_exit_extreme: float = 74.0
 
@@ -333,12 +333,21 @@ class RenderQuantV1(IStrategy):
         ker_ok = dataframe["ker"] >= active_ker_min
         liquidity_ok = dataframe["volume_usd_24h"] >= self.min_24h_volume_usd
         chase_risk = (close > r1) & (low.shift(1) > r1)
-        not_stretched = (dataframe["stretch_atr"] <= 1.5) if "stretch_atr" in dataframe.columns else True
+        active_stretch_max = 1.8 if is_v2 else 2.2
+        not_stretched = (dataframe["stretch_atr"] <= active_stretch_max) if "stretch_atr" in dataframe.columns else True
+        bb_lo = dataframe["bb_lower"] if "bb_lower" in dataframe.columns else close * 0.95
 
-        # Ramo 1: Retomada de Momentum em Tendência (elimina contradição dual_bullish + RSI <= 48)
-        trend_rsi_max = 60.0 if is_v2 else self.rsi_entry_max
+        # Ramo 1: Retomada de Momentum em Tendência (inclui ponte de recuperação V1 acima de SMA50 crescente)
+        trend_rsi_max = 62.0 if is_v2 else self.rsi_entry_max
+        if is_v2:
+            trend_struct = close > dataframe["sma200"]
+        else:
+            sma50_rising = dataframe["sma50"] > dataframe["sma50"].shift(8)
+            trend_struct = (close > dataframe["sma200"]) | (
+                (close > dataframe["sma50"]) & sma50_rising & (close >= dataframe["sma200"] * 0.985)
+            )
         trend_mom = (
-            (close > dataframe["sma200"])
+            trend_struct
             & (dataframe["ema9"] > dataframe["ema21"])
             & (macd_hist > 0)
             & (macd_hist > macd_hist.shift(1))
@@ -368,18 +377,27 @@ class RenderQuantV1(IStrategy):
                 (dataframe["is_whale_vol"] == 1)
                 | ((close - p).abs() / p.replace(0.0, np.nan) <= 0.012)
                 | ((close - s1).abs() / s1.replace(0.0, np.nan) <= 0.012)
-                | (close <= dataframe["bb_lower"] * 1.006)
+                | (close <= bb_lo * 1.006)
             )
             pullback_cond = pullback_base & support_v2
         else:
             pullback_cond = pullback_base
 
-        # Ramo 3: Capitulação Estatística com Confirmação Compradora na Banda Inferior
+        # Ramo 3: Capitulação Estatística ou Reversão em V Confirmada pós-capitulação extrema
         rev_bb_max = 0.02 if is_v2 else 0.04
         rev_rsi_max = 28.0 if is_v2 else 30.0
+        vbottom_bb_max = -0.12 if is_v2 else -0.10
+        vbottom_rsi_max = 25.0 if is_v2 else 26.5
+        direct_rev = (bb_pos <= rev_bb_max) & (dataframe["rsi"] <= rev_rsi_max)
+        v_bottom_reclaim = (
+            (bb_pos.shift(1) <= vbottom_bb_max)
+            & (dataframe["rsi"].shift(1) <= vbottom_rsi_max)
+            & (close > bb_lo)
+            & (close > close.shift(1))
+            & (dataframe["rsi"] <= 46.0)
+        )
         reversion_cond = (
-            (bb_pos <= rev_bb_max)
-            & (dataframe["rsi"] <= rev_rsi_max)
+            (direct_rev | v_bottom_reclaim)
             & (dataframe["natr"] >= 0.22)
             & (dataframe["natr"] <= self.max_natr)
             & is_green
@@ -590,9 +608,14 @@ class RenderQuantV1(IStrategy):
                     bid = float(ticker["bid"])
                     ask = float(ticker["ask"])
                     spread = (ask - bid) / bid
-                    if spread > 0.0015:  # Veto se spread for superior a 0.15% (15 bps)
-                        logger.info("RenderQuant [SPREAD VETO]: %s com spread excessivo de %.3f%% (> 0.150%%)", pair, spread * 100)
-                        self._record_decision(pair, "REJECT", f"Spread excessivo no book ({spread*100:.3f}% > 0.150%)")
+                    if spread > 0.0025:  # Veto se spread superar 0.25% (25 bps; ordens limit absorvem 1-2 ticks em altcoins)
+                        now_sp = time.time()
+                        if not hasattr(self, "_last_spread_veto_log"):
+                            self._last_spread_veto_log: dict[str, float] = {}
+                        if (now_sp - self._last_spread_veto_log.get(pair, 0.0)) >= 60.0:
+                            self._last_spread_veto_log[pair] = now_sp
+                            logger.info("RenderQuant [SPREAD VETO]: %s com spread excessivo de %.3f%% (> 0.250%%)", pair, spread * 100)
+                        self._record_decision(pair, "REJECT", f"Spread excessivo no book ({spread*100:.3f}% > 0.250%)")
                         return False
             except Exception as exc:
                 logger.debug("RenderQuant: Falha ao verificar spread de %s: %s", pair, exc)

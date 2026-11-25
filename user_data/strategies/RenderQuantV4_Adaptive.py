@@ -9,11 +9,10 @@ Inspirada no cruzamento de dados de mercado, NostalgiaForInfinity e SMAOffsetPro
 4. Paridade de Risco e Suporte a Micro-Bancas (Kraken ordermin adaptativo).
 5. Proteções Nativas Freqtrade: CooldownPeriod, StoplossGuard e MaxDrawdown.
 """
-import json
 import logging
 import pathlib
 from datetime import datetime, timezone
-from typing import Any, Optional, Union
+from typing import Any, Optional
 
 import numpy as np
 import talib.abstract as ta
@@ -169,7 +168,7 @@ class RenderQuantV4_Adaptive(IStrategy):
             (dataframe["bb_pos"] < self.bb_pos_entry)
             & (close > ema200 * self.ema200_floor)
             & ((dataframe["lower_wick_ratio"] >= self.min_wick_ratio) | (close > open_p))
-            & (dataframe["btc_no_crash"] == True)
+            & dataframe["btc_no_crash"].astype(bool)
             & (dataframe["vol_usd_24h"] >= self.min_vol_usd_24h)
             & (dataframe["volume"] > 0)
         )
@@ -181,7 +180,7 @@ class RenderQuantV4_Adaptive(IStrategy):
             & (dataframe["bb_pos"] <= 0.42)
             & (dataframe["rsi"] < 52)
             & ((dataframe["lower_wick_ratio"] >= self.min_wick_ratio) | (close > open_p))
-            & (dataframe["btc_no_crash"] == True)
+            & dataframe["btc_no_crash"].astype(bool)
             & (dataframe["vol_usd_24h"] >= self.min_vol_usd_24h)
             & (dataframe["volume"] > 0)
         )
@@ -192,50 +191,47 @@ class RenderQuantV4_Adaptive(IStrategy):
         dataframe.loc[cond_pullback, "enter_long"] = 1
         dataframe.loc[cond_pullback, "enter_tag"] = "V4:trend_pullback"
 
-        # Atualiza diagnóstico /why para telemetria em tempo real
+        # Atualiza diagnóstico /why para telemetria em tempo real (somente live/dry_run)
         try:
-            pair = metadata.get("pair", "")
-            last_idx = dataframe.index[-1]
-            last_row = dataframe.loc[last_idx]
-            has_sig = bool(dataframe["enter_long"].iloc[-1] == 1) if "enter_long" in dataframe.columns else False
-            bb_p = float(last_row.get("bb_pos", 1.0))
-            rsi_v = float(last_row.get("rsi", 50.0))
-            c_price = float(last_row.get("close", 0.0))
-            vol_v = float(last_row.get("vol_usd_24h", 0.0))
+            dp = getattr(self, "dp", None)
+            runmode = getattr(dp, "runmode", None) if dp is not None else None
+            if runmode is None and isinstance(getattr(self, "config", None), dict):
+                runmode = self.config.get("runmode")
+            rm_str = str(getattr(runmode, "value", runmode)).lower() if runmode is not None else "live"
+            if rm_str in ("live", "dry_run"):
+                pair = str(metadata.get("pair", ""))
+                last_row = dataframe.iloc[-1]
+                has_sig = bool(dataframe["enter_long"].iloc[-1] == 1) if "enter_long" in dataframe.columns else False
+                bb_p = float(last_row.get("bb_pos", 1.0))
+                rsi_v = float(last_row.get("rsi", 50.0))
+                c_price = float(last_row.get("close", 0.0))
+                vol_v = float(last_row.get("vol_usd_24h", 0.0))
 
-            if pair.startswith("BTC") or has_sig:
-                if has_sig:
-                    reason = f"Confluência de compra confirmada! BB_Pos: {bb_p*100:.1f}% | RSI: {rsi_v:.1f}"
-                    decision = "ENTER"
-                elif bb_p >= 0.55:
-                    reason = (
-                        f"Mercado em topo/sobrecompra (BB_Pos: {bb_p*100:.1f}% | RSI: {rsi_v:.1f}). "
-                        f"Preço na metade superior das Bandas de Bollinger. Comprar agora seria comprar no topo. "
-                        f"Aguardando recuo saudável."
-                    )
-                    decision = "WAITING_DIP"
-                else:
-                    reason = (
-                        f"Preço em consolidação neutra (BB_Pos: {bb_p*100:.1f}% | RSI: {rsi_v:.1f}). "
-                        f"Aguardando retração à banda inferior ou gatilho de momentum."
-                    )
-                    decision = "WAITING_CONFIRMATION"
+                if not hasattr(self, "_v4_pairs_cache"):
+                    self._v4_pairs_cache: dict[str, dict] = {}
+                if pair:
+                    self._v4_pairs_cache[pair] = {
+                        "price": c_price,
+                        "bb_pos": round(bb_p, 4),
+                        "rsi": round(rsi_v, 2),
+                        "vol_usd_24h": round(vol_v, 0),
+                        "signal": has_sig,
+                    }
 
-                why_dict = {
-                    "decision": decision,
-                    "pair": pair,
-                    "price": c_price,
-                    "bb_pos": round(bb_p, 3),
-                    "rsi": round(rsi_v, 1),
-                    "vol_usd_24h": round(vol_v, 0),
-                    "reason": reason,
-                    "mode": "RenderQuantV4_Adaptive (4h)",
-                    "ts": datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M:%S UTC"),
-                }
-                for p_str in ["user_data/why_state.json", "/freqtrade/user_data/why_state.json"]:
-                    p_obj = pathlib.Path(p_str)
-                    if p_obj.parent.exists():
-                        p_obj.write_text(json.dumps(why_dict, indent=2), encoding="utf-8")
+                if (pair.startswith("BTC") or has_sig) and self._v4_pairs_cache:
+                    from user_data.state_store import save_state_async
+                    why_dict = {
+                        "strategy": "RenderQuantV4_Adaptive",
+                        "timeframe": self.timeframe,
+                        "bb_pos_target": self.bb_pos_entry,
+                        "updated_at": datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC"),
+                        "pairs": dict(self._v4_pairs_cache),
+                    }
+                    save_state_async(
+                        "why_state",
+                        why_dict,
+                        [pathlib.Path("user_data/why_state.json"), pathlib.Path("/freqtrade/user_data/why_state.json")],
+                    )
         except Exception as exc:
             logger.debug("Falha ao gravar telemetria why_state: %s", exc)
 
