@@ -1616,7 +1616,7 @@ LITERAL_TRANSLATIONS = [
     ("Status: `stopped`", "🛑 *Status:* `Robô parado (pausado).`"),
     ("*Status:* `stopping ...`", "⏳ *Status:* `Pausando o robô...`"),
     ("Status: `stopping ...`", "⏳ *Status:* `Pausando o robô...`"),
-    ("*Status:* `process died`", "🔴 *Status:* `Processo interrompido — reiniciando com segurança...`"),
+    ("*Status:* `process died`", "🔄 *Status:* `Instância anterior encerrada durante atualização/reinício.`"),
     ("Stopping trader ...", "🛑 Pausando o robô de operações..."),
     ("*Warning:* `no active trade`", "ℹ️ *Aviso:* `Nenhuma operação aberta no momento.`"),
     ("Warning: `no active trade`", "ℹ️ *Aviso:* `Nenhuma operação aberta no momento.`"),
@@ -2216,11 +2216,18 @@ def install_pt_br_hooks() -> None:
                     f"ou aguardam retomada de tendência na `{strat_name}`."
                 )
 
+            veto_line = ""
+            if state.get("decision") == "REJECT" and state.get("reason"):
+                veto_pair = state.get("pair", "Par")
+                veto_ts = state.get("ts", "")
+                veto_line = f"• *Último Veto de Entrada ({veto_ts}):* `{veto_pair}` — _{state['reason']}_\n"
+
             msg = (
                 f"🛡️ *Diagnóstico de Entrada (/why)*\n\n"
                 f"• *Estratégia:* `{strat_name} ({tf_label})`\n"
                 f"• *Gatilho de Reversão:* `BB_Pos <= {target_bb*100:.1f}%` (+ retomada de tendência/pullback)\n"
-                f"• *Última Telemetria:* `{updated_ts}`\n\n"
+                f"• *Última Telemetria:* `{updated_ts}`\n"
+                f"{veto_line}\n"
                 f"📊 *Posição dos Pares em Tempo Real:*\n"
                 + "\n".join(rows) +
                 f"\n\n🔍 *Diagnóstico Matemático:*\n{diag}\n\n"

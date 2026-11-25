@@ -109,17 +109,34 @@ class RenderQuantV1(IStrategy):
         heat: float | None = None,
         cluster: str | None = None,
     ) -> None:
-        """Persiste em disco a ?ltima decis?o/rejei??o para o comando /why do Telegram (Claude Fable 5.1)."""
-        payload = {
+        """Persiste decisão/veto preservando telemetria dos pares para o comando /why."""
+        now_ts = time.time()
+        if not hasattr(self, "_last_decision_write"):
+            self._last_decision_write: dict[tuple[str, str, str], float] = {}
+        d_key = (pair, decision, reason)
+        if (now_ts - self._last_decision_write.get(d_key, 0.0)) < 60.0:
+            return
+        self._last_decision_write[d_key] = now_ts
+
+        mode = self._cached_strategy_mode
+        rev_bb = 0.02 if mode == "RenderQuantV2_Institutional" else 0.04
+        pairs_snapshot = dict(getattr(self, "_why_pairs_cache", {}) or {})
+        payload: dict[str, Any] = {
             "ts": datetime.now(UTC).strftime("%H:%M:%S UTC"),
+            "updated_at": datetime.now(UTC).strftime("%d/%m/%Y %H:%M UTC"),
+            "strategy": mode,
+            "timeframe": self.timeframe,
+            "bb_pos_target": rev_bb,
             "pair": pair,
             "decision": decision,
             "reason": reason,
             "ker": ker,
             "heat": heat,
             "cluster": cluster,
-            "mode": self._cached_strategy_mode,
+            "mode": mode,
         }
+        if pairs_snapshot:
+            payload["pairs"] = pairs_snapshot
         try:
             from user_data.state_store import save_state_async
             save_state_async("why_state", payload, [self.WHY_STATE_FILE, pathlib.Path("/freqtrade/user_data/why_state.json")])
@@ -368,7 +385,20 @@ class RenderQuantV1(IStrategy):
             & is_green
         )
 
-        valid_signal = trend_mom | pullback_cond | reversion_cond
+        # Ramo 4: Retomada Antecipada por Cruzamento EMA9 > EMA21 com MACD positivo
+        cross_rsi_max = 55.0 if is_v2 else 58.0
+        cross_up_cond = (
+            (dataframe["ema9"] > dataframe["ema21"])
+            & (dataframe["ema9"].shift(1) <= dataframe["ema21"].shift(1))
+            & (macd_hist > 0)
+            & (dataframe["rsi"] <= cross_rsi_max)
+            & ker_ok
+            & (dataframe["natr"] >= 0.22)
+            & (dataframe["natr"] <= self.max_natr)
+            & is_green
+        )
+
+        valid_signal = trend_mom | pullback_cond | reversion_cond | cross_up_cond
         entry_conditions = valid_signal & liquidity_ok & (dataframe["volume"] > 0)
 
         dataframe.loc[entry_conditions, "enter_long"] = 1
@@ -382,14 +412,14 @@ class RenderQuantV1(IStrategy):
                 "V2:support_pullback",
             )
             tags = np.select(
-                [pullback_cond, trend_mom, reversion_cond],
-                [v2_pull_tag, "V2:trend_mom", "V2:oversold_reclaim"],
+                [pullback_cond, trend_mom, cross_up_cond, reversion_cond],
+                [v2_pull_tag, "V2:trend_mom", "V2:early_cross", "V2:oversold_reclaim"],
                 default="V2:support_pullback",
             )
         else:
             tags = np.select(
-                [pullback_cond, trend_mom, reversion_cond],
-                ["V1:equilibrada_pullback", "V1:trend_mom", "V1:oversold_reclaim"],
+                [pullback_cond, trend_mom, cross_up_cond, reversion_cond],
+                ["V1:equilibrada_pullback", "V1:trend_mom", "V1:early_cross", "V1:oversold_reclaim"],
                 default="V1:equilibrada_pullback",
             )
         dataframe.loc[entry_conditions, "enter_tag"] = pd.Series(tags, index=dataframe.index).loc[entry_conditions]
@@ -582,9 +612,29 @@ class RenderQuantV1(IStrategy):
                     last_btc = btc_df.iloc[-1]
                     btc_c = float(last_btc.get("close", 0.0))
                     btc_e50 = float(last_btc.get("sma50", last_btc.get("ema50", 0.0)))
-                    if btc_c > 0 and btc_e50 > 0 and btc_c < btc_e50:
-                        logger.info("RenderQuant [BTC MACRO VETO]: %s bloqueado pois BTC ($%.0f) est? abaixo da m?dia de 50 ($%.0f)", pair, btc_c, btc_e50)
-                        self._record_decision(pair, "REJECT", f"Regime Macro: BTC abaixo da m?dia de 50 ($ {btc_c:.0f} < $ {btc_e50:.0f})")
+                    btc_e9 = float(last_btc.get("ema9", 0.0) or 0.0)
+                    btc_e21 = float(last_btc.get("ema21", 0.0) or 0.0)
+                    btc_mh = float(last_btc.get("macd_hist", 0.0) or 0.0)
+                    btc_early_recovery = (
+                        btc_e9 > 0
+                        and btc_e21 > 0
+                        and btc_e9 > btc_e21
+                        and btc_mh > 0
+                        and btc_c >= btc_e50 * 0.995
+                    )
+                    if btc_c > 0 and btc_e50 > 0 and btc_c < btc_e50 and not btc_early_recovery:
+                        now_v = time.time()
+                        if not hasattr(self, "_last_btc_veto_log"):
+                            self._last_btc_veto_log: dict[str, float] = {}
+                        if (now_v - self._last_btc_veto_log.get(pair, 0.0)) >= 60.0:
+                            self._last_btc_veto_log[pair] = now_v
+                            logger.info(
+                                "RenderQuant [BTC MACRO VETO]: %s bloqueado pois BTC ($%.0f) está abaixo da média de 50 ($%.0f) sem retomada de momentum.",
+                                pair,
+                                btc_c,
+                                btc_e50,
+                            )
+                        self._record_decision(pair, "REJECT", f"Regime Macro: BTC abaixo da média de 50 (${btc_c:.0f} < ${btc_e50:.0f})")
                         return False
             except Exception as exc:
                 logger.debug("RenderQuant: Falha n?o cr?tica na checagem do BTC Macro Guard: %s", exc)

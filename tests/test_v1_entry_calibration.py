@@ -117,6 +117,18 @@ def test_v1_branches_generate_entries_and_tags():
     out_red = strat.populate_entry_trend(df_red, {"pair": "ADA/USDT"})
     assert out_red.get("enter_long", pd.Series([0] * 3)).iloc[2] != 1
 
+    # Ramo 4: Retomada Antecipada por Cruzamento EMA9 > EMA21 (V1:early_cross)
+    df_cross = _base_df(3)
+    df_cross["sma50"] = 94.0  # desativa pullback
+    df_cross["sma200"] = 105.0  # abaixo da sma200 -> desativa trend_mom
+    df_cross["ema9"] = [99.0, 99.5, 100.3]
+    df_cross["ema21"] = [99.8, 99.8, 99.9]
+    df_cross["macd_hist"] = [-0.1, -0.02, 0.08]
+    df_cross["rsi"] = [42.0, 44.0, 49.0]
+    out_cross = strat.populate_entry_trend(df_cross, {"pair": "ETH/USDT"})
+    assert out_cross.loc[2, "enter_long"] == 1
+    assert out_cross.loc[2, "enter_tag"] == "V1:early_cross"
+
 
 def test_v2_institutional_respects_tighter_thresholds():
     strat = RenderQuantV2_Institutional()
@@ -156,6 +168,10 @@ def test_cmd_why_renders_v1_timeframe_15m(tmp_path):
         "timeframe": "15m",
         "bb_pos_target": 0.04,
         "updated_at": "24/11/2026 23:55 UTC",
+        "decision": "REJECT",
+        "pair": "ETH/USDT",
+        "ts": "02:15:24 UTC",
+        "reason": "Regime Macro: BTC abaixo da média de 50 ($59179 < $59826)",
         "pairs": {
             "BTC/USDT": {"price": 59797.9, "bb_pos": 0.428, "rsi": 45.8},
             "ADA/USDT": {"price": 0.1444, "bb_pos": 0.553, "rsi": 48.6},
@@ -241,3 +257,72 @@ def test_cmd_why_renders_v1_timeframe_15m(tmp_path):
         assert "RenderQuantV1 (15m)" in sent
         assert "$0.1444" in sent
         assert "$59,797.90" in sent
+        assert "Último Veto de Entrada" in sent
+        assert "ETH/USDT" in sent
+
+
+def test_record_decision_preserves_pairs_and_throttles():
+    strat = RenderQuantV1()
+    strat._why_pairs_cache = {
+        "BTC/USDT": {"price": 59000.0, "bb_pos": 0.22, "rsi": 43.0},
+    }
+    captured_payloads = []
+
+    def fake_save(key, payload, paths):
+        captured_payloads.append((key, payload))
+
+    with patch("user_data.state_store.save_state_async", side_effect=fake_save):
+        strat._record_decision("ETH/USDT", "REJECT", "BTC Macro Veto")
+        strat._record_decision("ETH/USDT", "REJECT", "BTC Macro Veto")
+
+    assert len(captured_payloads) == 1
+    _, payload = captured_payloads[0]
+    assert "pairs" in payload
+    assert "BTC/USDT" in payload["pairs"]
+    assert payload["decision"] == "REJECT"
+    assert payload["pair"] == "ETH/USDT"
+
+
+def test_btc_macro_guard_allows_early_recovery_and_blocks_dump():
+    from datetime import UTC, datetime
+
+    strat = RenderQuantV1()
+    strat.wallets = MagicMock()
+    strat.wallets.get_total_stake_amount.return_value = 100.0
+    strat.wallets.get_available_stake_amount.return_value = 100.0
+    strat.config = {"stake_currency": "USDT", "runmode": "backtest"}
+    strat.dp = MagicMock()
+    strat.dp.runmode = "backtest"
+    strat.dp.ticker.return_value = {"bid": 1650.0, "ask": 1650.5}
+
+    # 1. BTC em queda forte abaixo da SMA50 (-1%) -> BLOQUEIA altcoin
+    strat.dp.get_analyzed_dataframe.return_value = (
+        pd.DataFrame([{
+            "close": 59179.0,
+            "sma50": 59826.0,
+            "ema9": 59100.0,
+            "ema21": 59300.0,
+            "macd_hist": -50.0,
+        }]),
+        datetime.now(UTC),
+    )
+    ok_dump = strat.confirm_trade_entry(
+        "ETH/USDT", "limit", 0.002, 1650.0, "gtc", datetime.now(UTC), "V1:oversold_reclaim", "long"
+    )
+    assert ok_dump is False
+
+    # 2. BTC em recuperação inicial dentro de 0.5% da SMA50 (ema9>ema21 e macd_hist>0) -> LIBERA altcoin
+    strat.dp.get_analyzed_dataframe.return_value = (
+        pd.DataFrame([{
+            "close": 59600.0,
+            "sma50": 59800.0,
+            "ema9": 59580.0,
+            "ema21": 59450.0,
+            "macd_hist": 25.0,
+        }]),
+        datetime.now(UTC),
+    )
+    ok_rec = strat.confirm_trade_entry(
+        "ETH/USDT", "limit", 0.002, 1650.0, "gtc", datetime.now(UTC), "V1:early_cross", "long"
+    )
+    assert ok_rec is True
