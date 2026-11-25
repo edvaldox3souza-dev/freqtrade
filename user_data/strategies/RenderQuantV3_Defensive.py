@@ -243,28 +243,18 @@ class RenderQuantV3_Defensive(IStrategy):
         fee_buffer_pct = 0.0062
         effective_max_stake = float(max_stake) * (1.0 - fee_buffer_pct)
         stake = min((total_wallet * 0.01) / stop_d, total_wallet * 0.10, effective_max_stake)
-        if min_stake is not None and stake < float(min_stake):
-            f_min_stake = float(min_stake)
-            max_micro_slot = total_wallet * 0.28
-            est_stop_loss_usd = f_min_stake * stop_d
-            max_stop_loss_usd = total_wallet * 0.015
-            if (
-                total_wallet < 50.0
-                and f_min_stake <= effective_max_stake
-                and f_min_stake <= max_micro_slot
-                and est_stop_loss_usd <= max_stop_loss_usd
-            ):
-                logger.info(
-                    "V3 [MICRO-STAKE RISK-BOUNDED]: %s ajustado para $%.2f (perda stop=$%.2f <= 1.50%%).",
-                    pair, f_min_stake, est_stop_loss_usd,
-                )
-                stake = f_min_stake
-            else:
-                logger.warning(
-                    "V3 [RISK VETO]: Ordem em %s recusada – min_stake ($%.2f) excede teto aprovado ($%.2f | banca=$%.2f).",
-                    pair, f_min_stake, stake, total_wallet,
-                )
-                return 0.0
+        from user_data.micro_risk import resolve_stake_with_micro_floor
+
+        stake = resolve_stake_with_micro_floor(
+            pair=pair,
+            prefix="V3",
+            total_wallet=total_wallet,
+            cap=stake,
+            min_stake=min_stake,
+            effective_max_stake=effective_max_stake,
+            stressed_dist_pct=stop_d,
+            strat_logger=logger,
+        )
         if not np.isfinite(stake) or stake <= 0:
             return 0.0
         return round(float(stake), 8)
@@ -309,9 +299,9 @@ class RenderQuantV3_Defensive(IStrategy):
                 sl = getattr(t, "stop_loss_or_limit", None) or (t.open_rate or 0) * 0.95
                 open_heat += abs((t.open_rate or 0) - sl) * float(getattr(t, "amount", 0) or 0)
             incoming = 0.05 * float(amount) * float(rate)
-            # Para bancas institucionais (> $50), heat cap rigoroso de 3%.
-            # Para micro-bancas (< $50), heat cap de 6% para acomodar 1 posicao minima de exchange.
-            max_heat = 0.06 if total_balance < 50.0 else 0.03
+            from user_data.micro_risk import effective_portfolio_heat_limit
+
+            max_heat = effective_portfolio_heat_limit(total_balance, 0.03)
             if (open_heat + incoming) / max(total_balance, 10.0) > max_heat:
                 logger.warning("V3 [HEAT VETO]: heat projetado acima de %.2f%% - %s vetada", max_heat * 100, pair)
                 return False

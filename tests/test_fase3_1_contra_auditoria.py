@@ -41,13 +41,13 @@ class TestRegra1MatematicaStake:
     @pytest.mark.parametrize(
         ("wallet", "min_stake", "esperado_v1", "esperado_v2", "esperado_v3", "esperado_v4"),
         [
-            # $16.30 -> slot máx 28% = $4.564, perda máx stop 1.5% = $0.2445
-            # $2.95 e $3.76 cabem em todas (V1/V2 loss=$0.135/$0.172; V3/V4 loss=$0.166/$0.211)
+            # $16.30 (micro-banca <$50) -> slot máx 60% = $9.78, perda máx stop 5% = $0.815
+            # Lotes reais de Kraken ($2.95, $3.76, $4.85, $9.50) cabem todas com folga
             (16.30, 2.95, 2.95, 2.95, 2.95, 2.95),
             (16.30, 3.76, 3.76, 3.76, 3.76, 3.76),
-            # $4.85 excede slot de 28% ($4.564) -> VETO em todas
-            (16.30, 4.85, 0.0, 0.0, 0.0, 0.0),
-            (16.30, 9.50, 0.0, 0.0, 0.0, 0.0),
+            (16.30, 4.85, 4.85, 4.85, 4.85, 4.85),
+            (16.30, 9.50, 9.50, 9.50, 9.50, 9.50),
+            # $12.00 excede 60% de $16.30 ($9.78) -> VETO seguro contra concentração excessiva
             (16.30, 12.00, 0.0, 0.0, 0.0, 0.0),
             # $50.00 (fora de micro-banca <50) -> cap 10% = $5.00 em V1/V3/V4; na V2 cap 8% = $4.00 (< $5.00 -> veto)
             (50.00, 5.00, 5.00, 0.0, 5.00, 5.00),

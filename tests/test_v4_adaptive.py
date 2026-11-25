@@ -51,7 +51,9 @@ def test_v4_stake_micro_wallet():
     stake = strat.custom_stake_amount("ETH/USDT", datetime.now(), 3400.0, 100.0, 6.80, 9999.0, 1.0, None, "long")
     assert stake == 100.0
 
-    # Micro-banca ($16.29) com min_stake da exchange ($6.80) -> DEVE recusar (0.0) por violar cap 10% ($1.63) e risco 1%
+    # Micro-banca ($16.29) com min_stake viável ($6.80 <= 60% = $9.77) -> libera $6.80; acima de 60% ($12.00) veta
     strat.wallets.get_total_stake_amount.return_value = 16.29
-    stake_micro = strat.custom_stake_amount("ETH/USDT", datetime.now(), 3400.0, 1.62, 6.80, 9999.0, 1.0, None, "long")
-    assert stake_micro == 0.0
+    stake_micro = strat.custom_stake_amount("ETH/USDT", datetime.now(), 3400.0, 1.62, 6.80, 16.12, 1.0, None, "long")
+    assert stake_micro == 6.80
+    stake_too_big = strat.custom_stake_amount("ETH/USDT", datetime.now(), 3400.0, 1.62, 12.00, 16.12, 1.0, None, "long")
+    assert stake_too_big == 0.0

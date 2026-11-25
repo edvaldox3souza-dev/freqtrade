@@ -54,7 +54,7 @@ class TestStakePolicyV1V2V3V4:
             pair="BTC/USDT", current_time=datetime.now(), current_rate=60000.0,
             proposed_stake=1.63, min_stake=4.85, max_stake=16.13, leverage=1.0, entry_tag=None, side="long"
         )
-        assert stake == 0.0, f"Esperado 0.0 (4.85 excede slot máximo de 28% = 4.56), obteve {stake}"
+        assert stake == 4.85, f"Esperado 4.85 na micro-banca liberada (<= 60% e <= 5% stop), obteve {stake}"
 
     def test_v1_micro_wallet_insufficient_for_min_stake(self):
         strat = RenderQuantV1()

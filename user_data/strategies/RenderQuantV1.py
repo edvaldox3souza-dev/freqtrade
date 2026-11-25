@@ -608,19 +608,19 @@ class RenderQuantV1(IStrategy):
                     bid = float(ticker["bid"])
                     ask = float(ticker["ask"])
                     spread = (ask - bid) / bid
-                    if spread > 0.0025:  # Veto se spread superar 0.25% (25 bps; ordens limit absorvem 1-2 ticks em altcoins)
+                    if spread > 0.0030:  # Veto se spread superar 0.30% (30 bps; tolera ticks reais em altcoins na Kraken)
                         now_sp = time.time()
                         if not hasattr(self, "_last_spread_veto_log"):
                             self._last_spread_veto_log: dict[str, float] = {}
                         if (now_sp - self._last_spread_veto_log.get(pair, 0.0)) >= 60.0:
                             self._last_spread_veto_log[pair] = now_sp
-                            logger.info("RenderQuant [SPREAD VETO]: %s com spread excessivo de %.3f%% (> 0.250%%)", pair, spread * 100)
-                        self._record_decision(pair, "REJECT", f"Spread excessivo no book ({spread*100:.3f}% > 0.250%)")
+                            logger.info("RenderQuant [SPREAD VETO]: %s com spread excessivo de %.3f%% (> 0.300%%)", pair, spread * 100)
+                        self._record_decision(pair, "REJECT", f"Spread excessivo no book ({spread*100:.3f}% > 0.300%)")
                         return False
             except Exception as exc:
                 logger.debug("RenderQuant: Falha ao verificar spread de %s: %s", pair, exc)
 
-        # 0.1 BTC Macro Regime Guard em Tempo Real (Claude Fable 5.1)
+        # 0.1 BTC Macro Regime Guard Anti-Crash (sem bloquear por micro-oscilação abaixo da SMA50)
         stake = "USD"
         try:
             if hasattr(self, "config") and self.config:
@@ -632,32 +632,28 @@ class RenderQuantV1(IStrategy):
             try:
                 btc_df, _ = dp.get_analyzed_dataframe(btc_pair, self.timeframe)
                 if btc_df is not None and not btc_df.empty:
+                    from user_data.micro_risk import is_btc_macro_vetoed
+
                     last_btc = btc_df.iloc[-1]
                     btc_c = float(last_btc.get("close", 0.0))
                     btc_e50 = float(last_btc.get("sma50", last_btc.get("ema50", 0.0)))
                     btc_e9 = float(last_btc.get("ema9", 0.0) or 0.0)
                     btc_e21 = float(last_btc.get("ema21", 0.0) or 0.0)
                     btc_mh = float(last_btc.get("macd_hist", 0.0) or 0.0)
-                    btc_early_recovery = (
-                        btc_e9 > 0
-                        and btc_e21 > 0
-                        and btc_e9 > btc_e21
-                        and btc_mh > 0
-                        and btc_c >= btc_e50 * 0.995
-                    )
-                    if btc_c > 0 and btc_e50 > 0 and btc_c < btc_e50 and not btc_early_recovery:
+                    veto_btc, veto_reason = is_btc_macro_vetoed(btc_c, btc_e50, btc_e9, btc_e21, btc_mh)
+                    if veto_btc:
                         now_v = time.time()
                         if not hasattr(self, "_last_btc_veto_log"):
                             self._last_btc_veto_log: dict[str, float] = {}
                         if (now_v - self._last_btc_veto_log.get(pair, 0.0)) >= 60.0:
                             self._last_btc_veto_log[pair] = now_v
                             logger.info(
-                                "RenderQuant [BTC MACRO VETO]: %s bloqueado pois BTC ($%.0f) está abaixo da média de 50 ($%.0f) sem retomada de momentum.",
+                                "RenderQuant [BTC MACRO VETO]: %s bloqueado pois BTC ($%.0f) está em queda ativa abaixo da SMA50 ($%.0f).",
                                 pair,
                                 btc_c,
                                 btc_e50,
                             )
-                        self._record_decision(pair, "REJECT", f"Regime Macro: BTC abaixo da média de 50 (${btc_c:.0f} < ${btc_e50:.0f})")
+                        self._record_decision(pair, "REJECT", veto_reason)
                         return False
             except Exception as exc:
                 logger.debug("RenderQuant: Falha n?o cr?tica na checagem do BTC Macro Guard: %s", exc)
@@ -705,6 +701,9 @@ class RenderQuantV1(IStrategy):
             logger.debug("RenderQuant: Falha n?o cr?tica na checagem do Daily Loss: %s", exc)
 
         # 2. Valida??o de Clusters de Correla??o
+        from user_data.micro_risk import effective_cluster_limit, effective_portfolio_heat_limit
+
+        active_cluster_limit = effective_cluster_limit(total_balance, self.MAX_TRADES_PER_CLUSTER)
         try:
             open_trades = Trade.get_trades_proxy(is_open=True)
             active_pairs = [t.pair for t in open_trades if getattr(t, "is_open", True)]
@@ -712,11 +711,12 @@ class RenderQuantV1(IStrategy):
             for cluster_name, cluster_pairs in self.CORRELATION_CLUSTERS.items():
                 if pair in cluster_pairs:
                     active_in_cluster = sum(1 for p in active_pairs if p in cluster_pairs)
-                    if active_in_cluster >= self.MAX_TRADES_PER_CLUSTER:
+                    if active_in_cluster >= active_cluster_limit:
                         logger.info(
-                            "RenderQuant [CLUSTER VETO]: Cluster %s saturado (%d posi??es ativas). Entrada em %s vetada.",
+                            "RenderQuant [CLUSTER VETO]: Cluster %s saturado (%d/%d posi??es ativas). Entrada em %s vetada.",
                             cluster_name,
                             active_in_cluster,
+                            active_cluster_limit,
                             pair,
                         )
                         self._record_decision(pair, "REJECT", f"Cluster {cluster_name} saturado ({active_in_cluster} posi??es ativas)", cluster=cluster_name)
@@ -724,7 +724,7 @@ class RenderQuantV1(IStrategy):
         except Exception as exc:
             logger.debug("RenderQuant: Falha n?o cr?tica na valida??o de clusters: %s", exc)
 
-        # 3. Portfolio Heat Gatekeeper (Hard Cap 3.0% de risco total aberto - Claude Fable 5.1 / HyperGrok)
+        # 3. Portfolio Heat Gatekeeper (3.0% institucional >= $50; 12.0% micro-banca < $50)
         try:
             open_trades = Trade.get_trades_proxy(is_open=True)
             risky_open = 0.0
@@ -740,26 +740,27 @@ class RenderQuantV1(IStrategy):
             incoming_risk = abs(rate - entry_sl_price) * float(amount)
             total_risk = risky_open + incoming_risk
             portfolio_heat = total_risk / max(total_balance, 10.0)
+            active_heat_limit = effective_portfolio_heat_limit(total_balance, self.portfolio_heat_limit)
 
-            if portfolio_heat > self.portfolio_heat_limit:
+            if portfolio_heat > active_heat_limit:
                 logger.warning(
-                    "RenderQuant [PORTFOLIO HEAT VETO]: Heat total projetado de %.2f%% excede o limite institucional de %.2f%%. "
+                    "RenderQuant [PORTFOLIO HEAT VETO]: Heat total projetado de %.2f%% excede o limite de %.2f%%. "
                     "(Risco aberto: $%.2f, Risco entrante: $%.2f, Total: $%.2f, Equity: $%.2f). Entrada em %s vetada.",
                     portfolio_heat * 100,
-                    self.portfolio_heat_limit * 100,
+                    active_heat_limit * 100,
                     risky_open,
                     incoming_risk,
                     total_risk,
                     total_balance,
                     pair,
                 )
-                self._record_decision(pair, "REJECT", f"Portfolio Heat excederia teto (Projetado: {portfolio_heat*100:.2f}% > {self.portfolio_heat_limit*100:.2f}%)", heat=portfolio_heat)
+                self._record_decision(pair, "REJECT", f"Portfolio Heat excederia teto (Projetado: {portfolio_heat*100:.2f}% > {active_heat_limit*100:.2f}%)", heat=portfolio_heat)
                 return False
 
             logger.info(
                 "RenderQuant [PORTFOLIO HEAT PASS]: Heat projetado %.2f%% / %.2f%% (Equity $%.2f). Entrada em %s autorizada.",
                 portfolio_heat * 100,
-                self.portfolio_heat_limit * 100,
+                active_heat_limit * 100,
                 total_balance,
                 pair,
             )
@@ -868,10 +869,10 @@ class RenderQuantV1(IStrategy):
         - Carteira Institucional / Normal: Sizing por ATR/volatilidade, cap de 10% (V1) ou 8% (V2).
         - Micro-Carteira (Kraken Spot, bancas < $50 USD):
           Se o stake calculado ficar abaixo de min_stake da exchange, permite elevar para min_stake
-          SOMENTE SE:
-          1. min_stake <= max_stake (há saldo livre nas wallets para cobrir a ordem);
-          2. min_stake <= total_wallet * 0.40 (a ordem não compromete mais de 40% da micro-banca);
-          3. min_stake <= (total_wallet - fee_reserve) (mantém reserva mínima de 2% ou $0.50 para taxas).
+          quando:
+          1. min_stake <= effective_max_stake (há saldo livre pós-taxas suficiente para cobrir a ordem);
+          2. min_stake <= total_wallet * 0.60 (não concentra mais de 60% da micro-banca em um único par);
+          3. perda estimada no stoploss <= total_wallet * 0.05 (limite prático de micro-banca).
           Caso contrário, recusa com log explicativo e retorna 0.0, prevenindo violação da gestão de risco.
         """
         # Se max_stake for inválido ou zero
@@ -974,47 +975,23 @@ class RenderQuantV1(IStrategy):
         effective_max_stake = float(max_stake) * (1.0 - fee_buffer_pct)
         cap = min(calculated_stake, total_wallet * active_stake_ratio, effective_max_stake)
 
-        # 4d. Trava estrita de min_stake com adequação controlada para micro-banca (< $50)
-        # Só permite adequar ao mínimo da Kraken quando TODAS as travas forem respeitadas:
-        # 1) Há saldo livre pós-taxas suficiente (f_min_stake <= effective_max_stake);
-        # 2) Alocação <= 28% da micro-banca por ativo (permite diversificação e folga);
-        # 3) Perda financeira estimada no stoploss estressado <= 1.5% da banca total.
-        if min_stake is not None and cap < float(min_stake):
-            f_min_stake = float(min_stake)
-            max_micro_slot = total_wallet * 0.28
-            est_stop_loss_usd = f_min_stake * stressed_dist_pct
-            max_stop_loss_usd = total_wallet * 0.015
+        # 4d. Trava de min_stake com adequação para micro-banca (< $50)
+        # Permite adequar ao mínimo da Kraken quando houver saldo livre pós-taxas,
+        # slot <= 60% da micro-banca e perda estimada no stop <= 5% da banca total.
+        from user_data.micro_risk import resolve_stake_with_micro_floor
 
-            if (
-                total_wallet < 50.0
-                and f_min_stake <= effective_max_stake
-                and f_min_stake <= max_micro_slot
-                and est_stop_loss_usd <= max_stop_loss_usd
-            ):
-                logger.info(
-                    "RenderQuant [MICRO-STAKE RISK-BOUNDED]: %s ajustado para lote mínimo Kraken $%.2f "
-                    "(%.1f%% da banca $%.2f | perda est. stop=$%.2f = %.2f%% <= 1.50%%).",
-                    pair,
-                    f_min_stake,
-                    (f_min_stake / max(total_wallet, 1e-9)) * 100.0,
-                    total_wallet,
-                    est_stop_loss_usd,
-                    (est_stop_loss_usd / max(total_wallet, 1e-9)) * 100.0,
-                )
-                cap = f_min_stake
-            else:
-                logger.warning(
-                    "RenderQuant [RISK VETO]: Ordem em %s recusada – min_stake ($%.2f) excede o limite aprovado "
-                    "(cap=$%.2f | slot_micro=$%.2f | perda_stop=$%.2f vs máx=$%.2f | banca=$%.2f).",
-                    pair,
-                    f_min_stake,
-                    cap,
-                    max_micro_slot,
-                    est_stop_loss_usd,
-                    max_stop_loss_usd,
-                    total_wallet,
-                )
-                return 0.0
+        cap = resolve_stake_with_micro_floor(
+            pair=pair,
+            prefix="RenderQuant",
+            total_wallet=total_wallet,
+            cap=cap,
+            min_stake=min_stake,
+            effective_max_stake=effective_max_stake,
+            stressed_dist_pct=stressed_dist_pct,
+            strat_logger=logger,
+        )
+        if not np.isfinite(cap) or cap <= 0:
+            return 0.0
 
         if not np.isfinite(cap) or cap <= 0:
             return 0.0
