@@ -57,6 +57,7 @@ class RenderQuantV1(IStrategy):
 
     use_exit_signal: bool = True
     exit_profit_only: bool = True
+    exit_profit_offset: float = 0.010
     exit_profit_min: float = 0.010
     ignore_roi_if_entry_signal: bool = False
 
@@ -65,8 +66,8 @@ class RenderQuantV1(IStrategy):
     max_natr: float = 4.00
     min_adx: float = 16.0
     rsi_entry_max: float = 68.0
-    rsi_exit_mid: float = 64.0
-    rsi_exit_extreme: float = 74.0
+    rsi_exit_mid: float = 72.0
+    rsi_exit_extreme: float = 78.0
 
     # Risco e Gest?o de Capital (HyperGrok & Maverick)
     max_risk_pct_per_trade: float = 0.01   # 1% de risco da banca por opera??o
@@ -337,20 +338,24 @@ class RenderQuantV1(IStrategy):
         not_stretched = (dataframe["stretch_atr"] <= active_stretch_max) if "stretch_atr" in dataframe.columns else True
         bb_lo = dataframe["bb_lower"] if "bb_lower" in dataframe.columns else close * 0.95
 
-        # Ramo 1: Retomada de Momentum em Tendência (inclui ponte de recuperação V1 acima de SMA50 crescente)
-        trend_rsi_max = 62.0 if is_v2 else self.rsi_entry_max
+        # Ramo 1: Retomada de Momentum em Tendência (inclui ponte de recuperação V1 acima de SMA50)
+        trend_rsi_max = 65.0 if is_v2 else self.rsi_entry_max
         if is_v2:
             trend_struct = close > dataframe["sma200"]
+            macd_mom_ok = (macd_hist > 0) & (macd_hist > macd_hist.shift(1))
         else:
-            sma50_rising = dataframe["sma50"] > dataframe["sma50"].shift(8)
+            sma50_rising_or_above_ema21 = (dataframe["sma50"] > dataframe["sma50"].shift(4)) | (close > dataframe["ema21"])
             trend_struct = (close > dataframe["sma200"]) | (
-                (close > dataframe["sma50"]) & sma50_rising & (close >= dataframe["sma200"] * 0.985)
+                (close > dataframe["sma50"]) & sma50_rising_or_above_ema21 & (close >= dataframe["sma200"] * 0.980)
+            )
+            macd_mom_ok = (macd_hist > 0) & (
+                (macd_hist > macd_hist.shift(1))
+                | ((dataframe["macd"] > dataframe["macd_signal"]) & (close > dataframe["ema9"]))
             )
         trend_mom = (
             trend_struct
             & (dataframe["ema9"] > dataframe["ema21"])
-            & (macd_hist > 0)
-            & (macd_hist > macd_hist.shift(1))
+            & macd_mom_ok
             & (dataframe["rsi"] <= trend_rsi_max)
             & ker_ok
             & natr_ok
@@ -359,11 +364,17 @@ class RenderQuantV1(IStrategy):
             & is_green
         )
 
-        # Ramo 2: Pullback Estrutural na EMA21 em Tendência Saudável (SMA50 > SMA200)
-        pull_rsi_max = 54.0 if is_v2 else 58.0
+        # Ramo 2: Pullback Estrutural na EMA21 em Tendência Saudável (ou recuperação V1 acima da SMA50 ascendente)
+        pull_rsi_max = 54.0 if is_v2 else 60.0
+        if is_v2:
+            pull_struct = (close > dataframe["sma50"]) & (dataframe["sma50"] > dataframe["sma200"])
+        else:
+            pull_struct = (close > dataframe["sma50"]) & (
+                (dataframe["sma50"] > dataframe["sma200"])
+                | ((dataframe["sma50"] > dataframe["sma50"].shift(6)) & (close >= dataframe["sma200"] * 0.985))
+            )
         pullback_base = (
-            (close > dataframe["sma50"])
-            & (dataframe["sma50"] > dataframe["sma200"])
+            pull_struct
             & (low <= dataframe["ema21"] * 1.008)
             & (close >= dataframe["ema21"] * 0.992)
             & (dataframe["rsi"] <= pull_rsi_max)
@@ -403,14 +414,15 @@ class RenderQuantV1(IStrategy):
             & is_green
         )
 
-        # Ramo 4: Retomada Antecipada por Cruzamento EMA9 > EMA21 com MACD positivo
-        cross_rsi_max = 55.0 if is_v2 else 58.0
+        # Ramo 4: Retomada Antecipada por Cruzamento EMA9 > EMA21 (KER calibrado para virada inicial)
+        cross_rsi_max = 56.0 if is_v2 else 60.0
+        cross_ker_ok = dataframe["ker"] >= (0.22 if is_v2 else 0.15)
         cross_up_cond = (
             (dataframe["ema9"] > dataframe["ema21"])
             & (dataframe["ema9"].shift(1) <= dataframe["ema21"].shift(1))
             & (macd_hist > 0)
             & (dataframe["rsi"] <= cross_rsi_max)
-            & ker_ok
+            & cross_ker_ok
             & (dataframe["natr"] >= 0.22)
             & (dataframe["natr"] <= self.max_natr)
             & is_green
@@ -545,6 +557,9 @@ class RenderQuantV1(IStrategy):
             (take_reversion | overbought_exit) & (dataframe["volume"] > 0),
             "exit_long",
         ] = 1
+        # Garantia dupla: nunca coexistir exit_long=1 na mesma vela de enter_long=1 (evita anulação silenciosa no Freqtrade)
+        if "enter_long" in dataframe.columns:
+            dataframe.loc[dataframe["enter_long"] == 1, "exit_long"] = 0
         return dataframe
 
     def confirm_trade_entry(
@@ -877,6 +892,7 @@ class RenderQuantV1(IStrategy):
         """
         # Se max_stake for inválido ou zero
         if not np.isfinite(max_stake) or max_stake <= 0:
+            logger.warning("RenderQuant [ZERO FREE STAKE]: Saldo livre insuficiente em %s (max_stake=%s).", pair, max_stake)
             return 0.0
 
         # Se min_stake for superior ao saldo disponível (max_stake), impossível executar
@@ -1023,19 +1039,21 @@ class RenderQuantV1(IStrategy):
 
         dynamic_stop = -float(np.clip(1.8 * atr_pct, 0.020, 0.045))
 
-        # Degrau 1: Lucro atingiu +2.5% -> Breakeven garantido cobrindo taxas (+0.60% l?quido)
-        if current_profit >= 0.025 and current_profit < 0.050:
-            return max(dynamic_stop, 0.0060)
+        # Degrau 1: Lucro atingiu +2.5% -> Breakeven garantido cobrindo taxas (+0.60% líquido sobre entrada)
+        if 0.025 <= current_profit < 0.050:
+            be_stop = -((current_profit - 0.0060) / (1.0 + current_profit))
+            return max(dynamic_stop, min(-0.0020, be_stop))
 
-        # Degrau 2: Lucro atingiu +5.0% -> Trava lucro l?quido de +3.00%
-        if current_profit >= 0.050 and current_profit < 0.080:
-            return max(dynamic_stop, 0.0300)
+        # Degrau 2: Lucro atingiu +5.0% -> Trava lucro líquido de +3.00% sobre entrada
+        if 0.050 <= current_profit < 0.080:
+            tier2_stop = -((current_profit - 0.0300) / (1.0 + current_profit))
+            return max(dynamic_stop, min(-0.0020, tier2_stop))
 
-        # Degrau 3: Lucro atingiu +8.0% -> Ratchet din?mico com ATR garantindo pelo menos +5.0% l?quido
+        # Degrau 3: Lucro atingiu +8.0% -> Ratchet negativo por ATR garantindo piso de +5.00% sobre entrada
         if current_profit >= 0.080:
             trailing_dist = max(atr_pct * 1.5, 0.020)
-            desired_stop = current_profit - trailing_dist
-            return max(dynamic_stop, desired_stop, 0.0500)
+            floor_stop = -((current_profit - 0.0500) / (1.0 + current_profit))
+            return max(dynamic_stop, -trailing_dist, min(-0.0020, floor_stop))
 
         return dynamic_stop
 

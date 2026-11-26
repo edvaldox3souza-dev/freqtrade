@@ -968,15 +968,37 @@ def get_strategy_state() -> dict:
     return data
 
 
+def _get_strategy_bb_target(strat_name: str) -> float:
+    if "V4" in strat_name:
+        return 0.18
+    if "V3" in strat_name:
+        return 0.12
+    if "V2" in strat_name:
+        return 0.02
+    return 0.04
+
+
 def update_strategy_state(strat_name: str) -> dict:
     with _RUNTIME_CFG_LOCK:
         state = get_strategy_state()
         state["active_strategy"] = strat_name
         state["updated_at"] = time.strftime("%H:%M:%S UTC")
         try:
-            from user_data.state_store import save_state
+            from user_data.state_store import clear_state_cache, save_state
             paths = [STRATEGY_STATE_PATH] + [p for p in STRATEGY_STATE_PATHS if p != STRATEGY_STATE_PATH]
             save_state("strategy_state", state, paths)
+            # Limpa telemetria why_state anterior para não misturar candles/alvos após troca de estratégia
+            for w_path in (
+                pathlib.Path("/tmp/why_state.json"),
+                pathlib.Path("/freqtrade/user_data/why_state.json"),
+                pathlib.Path("user_data/why_state.json"),
+            ):
+                try:
+                    if w_path.exists():
+                        w_path.unlink()
+                except OSError:
+                    pass
+            clear_state_cache()
         except Exception as exc:
             print("PT-BR_STRATEGY_STATE_WARN:", exc, flush=True)
 
@@ -1013,21 +1035,27 @@ def format_estrategia_text() -> str:
             "• *Timeframe:* `4h`\n"
             "• *Gatilho Reversão:* `BB_Pos < 12.0%` (Fundo de Sobrevenda Bollinger)\n"
             "• *Piso Estrutural Institucional:* `Preço >= 82% da EMA200 (4h)`\n"
-            "• *Filtro de Liquidez 24h:* `Volume >= $300.000 USDT`\n"
+            "• *Filtro de Liquidez 24h:* `Volume >= $200.000 USDT`\n"
             "• *Stop-Loss & Proteção:* `Stop: -5.0%` | `Breakeven em +2.5%` | `ROI: +10.0%`"
         )
     elif "V4" in active:
         gatilhos = (
             "• *Timeframe:* `4h`\n"
-            "• *Gatilho Adaptativo:* `BB_Pos < 15.0%` + Rejeição de Pavio (Wick)\n"
-            "• *Macro Guard:* `BTC acima da EMA200 (4h)`\n"
+            "• *Gatilho Adaptativo:* `BB_Pos < 18.0%` ou Pullback na EMA50 + Rejeição de Pavio\n"
+            "• *Piso Estrutural Adaptativo:* `Preço >= 80% da EMA200 (4h)`\n"
             "• *Gestão de Posição:* Trailing Breakeven dinâmico"
+        )
+    elif "V2" in active:
+        gatilhos = (
+            "• *Timeframe:* `15m`\n"
+            "• *Gatilho Institucional:* Momentum `EMA9 > EMA21`, Pullback em suporte, ou Reversão `BB <= 2%`\n"
+            "• *Filtro de Ruído:* `KER Kaufman >= 0.36` (teto RSI `65.0`)"
         )
     else:
         gatilhos = (
             "• *Timeframe:* `15m`\n"
-            "• *Gatilho:* `Dual Bullish EMA9 > EMA21` + `MACD > Signal`\n"
-            "• *Filtro de Ruído:* `KER Kaufman >= 0.35`"
+            "• *Gatilho Multi-Regime:* Tendência, Pullback na EMA21, Reversão `BB <= 4%`/V-bottom ou Early Cross\n"
+            "• *Filtro de Ruído:* `KER Kaufman >= 0.30` (`>= 0.15` em cruzamento inicial)"
         )
     return (
         f"🎯 *Seleção de Estratégia & Gestão Quantitativa*\n\n"
@@ -1230,7 +1258,7 @@ def build_web_pt_br_script() -> str:
         "  document.body.appendChild(btn);"
         "  const ov=document.createElement('div');ov.id='unk-strat-ov';"
         "  ov.style.cssText='display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.6);align-items:center;justify-content:center;';"
-        "  ov.innerHTML='<div style=\"background:#1e293b;color:#f8fafc;padding:22px;border-radius:12px;width:420px;max-width:92vw;font-family:sans-serif;\"><h3 style=\"margin:0 0 10px;display:flex;align-items:center;gap:8px;\">🎯 Alternar Estratégia do Robô</h3><p style=\"font-size:12px;color:#94a3b8;margin:0 0 14px;\">Selecione a estratégia quantitativa em tempo real. A comutação atualiza o motor imediatamente sem derrubar o container.</p><label style=\"display:block;font-size:12px;margin-bottom:6px;\">Estratégias Disponíveis:</label><select id=\"unk-strat-select\" style=\"width:100%;padding:10px;border-radius:6px;border:1px solid #475569;background:#0f172a;color:#fff;font-size:13px;\"><option value=\"RenderQuantV3_Defensive\">🧲 RenderQuant V3 (Defensiva 4h — Validada 600d)</option><option value=\"RenderQuantV4_Adaptive\">🚀 RenderQuant V4 (Adaptativa Multi-Regime 4h + Breakeven)</option><option value=\"RenderQuantV1\">🛡️ RenderQuant V1 (Equilibrada 15m)</option><option value=\"RenderQuantV2_Institutional\">🏛️ RenderQuant V2 (Institucional 15m)</option></select><div id=\"unk-strat-msg\" style=\"font-size:12px;margin-top:10px;color:#38bdf8;\"></div><div style=\"display:flex;gap:8px;justify-content:flex-end;margin-top:16px;\"><button id=\"unk-strat-close\" style=\"padding:8px 12px;border-radius:6px;border:1px solid #475569;background:transparent;color:#fff;cursor:pointer;\">Fechar</button><button id=\"unk-strat-save\" style=\"padding:8px 16px;border-radius:6px;border:none;background:#2563eb;color:#fff;font-weight:600;cursor:pointer;\">Salvar e Aplicar</button></div></div>';"
+        "  ov.innerHTML='<div style=\"background:#1e293b;color:#f8fafc;padding:22px;border-radius:12px;width:420px;max-width:92vw;font-family:sans-serif;\"><h3 style=\"margin:0 0 10px;display:flex;align-items:center;gap:8px;\">🎯 Alternar Estratégia do Robô</h3><p style=\"font-size:12px;color:#94a3b8;margin:0 0 14px;\">Selecione a estratégia quantitativa. A preferência é salva no Neon DB e o motor reinicia automaticamente em ~2s para carregar o novo timeframe e regras.</p><label style=\"display:block;font-size:12px;margin-bottom:6px;\">Estratégias Disponíveis:</label><select id=\"unk-strat-select\" style=\"width:100%;padding:10px;border-radius:6px;border:1px solid #475569;background:#0f172a;color:#fff;font-size:13px;\"><option value=\"RenderQuantV3_Defensive\">🧲 RenderQuant V3 (Defensiva 4h — Validada 600d)</option><option value=\"RenderQuantV4_Adaptive\">🚀 RenderQuant V4 (Adaptativa Multi-Regime 4h + Breakeven)</option><option value=\"RenderQuantV1\">🛡️ RenderQuant V1 (Equilibrada 15m)</option><option value=\"RenderQuantV2_Institutional\">🏛️ RenderQuant V2 (Institucional 15m)</option></select><div id=\"unk-strat-msg\" style=\"font-size:12px;margin-top:10px;color:#38bdf8;\"></div><div style=\"display:flex;gap:8px;justify-content:flex-end;margin-top:16px;\"><button id=\"unk-strat-close\" style=\"padding:8px 12px;border-radius:6px;border:1px solid #475569;background:transparent;color:#fff;cursor:pointer;\">Fechar</button><button id=\"unk-strat-save\" style=\"padding:8px 16px;border-radius:6px;border:none;background:#2563eb;color:#fff;font-weight:600;cursor:pointer;\">Salvar e Aplicar</button></div></div>';"
         "  document.body.appendChild(ov);"
         "  window.openStratModal=async()=>{"
         "    ov.style.display='flex';"
@@ -2244,7 +2272,7 @@ def install_pt_br_hooks() -> None:
             is_4h = ("V3" in active_strat or "V4" in active_strat)
             tf_label = "4h" if is_4h else "15m"
             interval = 240 if is_4h else 15
-            target_bb = 0.15 if "V4" in active_strat else 0.12
+            target_bb = _get_strategy_bb_target(active_strat)
             k_pairs = [
                 ("BTC/USDT", "XBTUSDT"),
                 ("ETH/USDT", "ETHUSDT"),
@@ -2313,7 +2341,7 @@ def install_pt_br_hooks() -> None:
             is_4h = ("V3" in active_strat or "V4" in active_strat)
             tf_label = "4h" if is_4h else "15m"
             interval = 240 if is_4h else 15
-            target_bb = 0.15 if "V4" in active_strat else 0.12
+            target_bb = _get_strategy_bb_target(active_strat)
             pairs = [
                 ("BTC/USDT", "XBTUSDT"),
                 ("ETH/USDT", "ETHUSDT"),
@@ -2836,6 +2864,7 @@ def main() -> None:
         if not boot_strategy:
             boot_strategy = os.environ.get("FREQTRADE_STRATEGY", "").strip() or "RenderQuantV3_Defensive"
     os.environ["FREQTRADE__STRATEGY"] = boot_strategy
+    os.environ["FREQTRADE__TIMEFRAME"] = "4h" if ("V3" in boot_strategy or "V4" in boot_strategy) else "15m"
     if db_url:
         os.environ["FREQTRADE__DB_URL"] = db_url
     print("PT-BR_BOOT_STRATEGY_RESOLVED:", boot_strategy, flush=True)

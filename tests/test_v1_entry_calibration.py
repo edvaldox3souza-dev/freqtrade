@@ -152,7 +152,7 @@ def test_v1_exit_does_not_dump_below_sma50_and_requires_profit():
         "close": [90.0, 95.0, 102.0],
         "sma50": [100.0, 100.0, 100.0],
         "bb_middle": [99.0, 99.0, 100.0],
-        "rsi": [32.0, 50.0, 66.0],
+        "rsi": [32.0, 50.0, 74.0],
         "volume": [100.0, 100.0, 100.0],
     })
     out = strat.populate_exit_trend(df, {"pair": "ETH/USDT"})

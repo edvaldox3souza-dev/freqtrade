@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 import numpy as np
+import pandas as pd
 import talib.abstract as ta
 from freqtrade.persistence import Trade
 from freqtrade.strategy import IStrategy
@@ -79,11 +80,11 @@ class RenderQuantV4_Adaptive(IStrategy):
         ]
 
     # Parâmetros Quantitativos Calibrados
-    bb_pos_entry: float = 0.15          # Fundo relativo da banda inferior (0 a 15%)
-    ema200_floor: float = 0.90          # Piso estrutural: acima de 90% da EMA200
+    bb_pos_entry: float = 0.18          # Fundo relativo da banda inferior (0 a 18%)
+    ema200_floor: float = 0.80          # Piso estrutural: aceita repique até -20% abaixo da EMA200 (4h)
     bb_pos_exit: float = 0.80           # Saída no topo da banda de Bollinger
     rsi_exit: int = 70                  # Saída por sobrecompra extrema
-    min_vol_usd_24h: float = 250_000.0  # Mínimo $250k USD negociados em 24h (calibrado para Kraken)
+    min_vol_usd_24h: float = 150_000.0  # Mínimo $150k USD negociados em 24h (compatível com LINK/USDT Kraken)
     min_wick_ratio: float = 0.15        # Pavio inferior mínimo (rejeição de preço)
 
     def informative_pairs(self):
@@ -127,7 +128,7 @@ class RenderQuantV4_Adaptive(IStrategy):
         # Volume notional acumulado em 24h (6 velas de 4h)
         dataframe["vol_usd_24h"] = (dataframe["volume"] * close).rolling(6, min_periods=3).sum().fillna(0)
 
-        # BTC Macro Guard (se o par não for o próprio BTC)
+        # BTC Macro Guard (alinhado por timestamp 'date' quando disponível para evitar drift de RangeIndex)
         stake = "USDT"
         if hasattr(self, "config") and self.config:
             stake = self.config.get("stake_currency", "USDT")
@@ -140,8 +141,25 @@ class RenderQuantV4_Adaptive(IStrategy):
                     btc_close = btc_df["close"]
                     btc_ema50 = ta.EMA(btc_df, timeperiod=50)
                     btc_change_4h = btc_close.pct_change()
-                    dataframe["btc_above_ema50"] = (btc_close > btc_ema50).reindex(dataframe.index, method="ffill").fillna(True)
-                    dataframe["btc_no_crash"] = (btc_change_4h > -0.04).reindex(dataframe.index, method="ffill").fillna(True)
+                    above_series = (btc_close > btc_ema50)
+                    nocrash_series = (btc_change_4h > -0.04)
+                    if "date" in dataframe.columns and "date" in btc_df.columns:
+                        btc_aligned = pd.DataFrame({
+                            "date": pd.to_datetime(btc_df["date"], utc=True),
+                            "btc_above_ema50": above_series.values,
+                            "btc_no_crash": nocrash_series.values,
+                        }).sort_values("date")
+                        left_dates = pd.DataFrame({
+                            "date": pd.to_datetime(dataframe["date"], utc=True),
+                            "_orig_idx": dataframe.index,
+                        }).sort_values("date")
+                        merged = pd.merge_asof(left_dates, btc_aligned, on="date", direction="backward")
+                        merged = merged.set_index("_orig_idx").reindex(dataframe.index)
+                        dataframe["btc_above_ema50"] = merged["btc_above_ema50"].fillna(True).astype(bool)
+                        dataframe["btc_no_crash"] = merged["btc_no_crash"].fillna(True).astype(bool)
+                    else:
+                        dataframe["btc_above_ema50"] = above_series.reindex(dataframe.index, method="ffill").fillna(True)
+                        dataframe["btc_no_crash"] = nocrash_series.reindex(dataframe.index, method="ffill").fillna(True)
                 else:
                     dataframe["btc_above_ema50"] = True
                     dataframe["btc_no_crash"] = True
@@ -160,6 +178,7 @@ class RenderQuantV4_Adaptive(IStrategy):
 
         close = dataframe["close"]
         open_p = dataframe["open"]
+        ema20 = dataframe["ema20"] if "ema20" in dataframe.columns else close
         ema50 = dataframe["ema50"] if "ema50" in dataframe.columns else dataframe.get("ema200", close)
         ema200 = dataframe["ema200"] if "ema200" in dataframe.columns else close
 
@@ -173,12 +192,12 @@ class RenderQuantV4_Adaptive(IStrategy):
             & (dataframe["volume"] > 0)
         )
 
-        # Modo 2: Trend Pullback (Tendência de Alta Estrutural + Recuo Saudável à Média)
+        # Modo 2: Trend Pullback (Alta Estrutural OU Retomada Sustentada Acima da EMA50)
         cond_pullback = (
-            (ema50 > ema200)
+            ((ema50 > ema200) | ((close > ema50) & (ema20 > ema50) & (close >= ema200 * 0.82)))
             & (close > ema50)
-            & (dataframe["bb_pos"] <= 0.42)
-            & (dataframe["rsi"] < 52)
+            & (dataframe["bb_pos"] <= 0.45)
+            & (dataframe["rsi"] < 55)
             & ((dataframe["lower_wick_ratio"] >= self.min_wick_ratio) | (close > open_p))
             & dataframe["btc_no_crash"].astype(bool)
             & (dataframe["vol_usd_24h"] >= self.min_vol_usd_24h)
@@ -302,6 +321,7 @@ class RenderQuantV4_Adaptive(IStrategy):
     ) -> float:
         """Risk parity institucional com reserva de taxas e veto estrito se min_stake violar risco."""
         if not np.isfinite(max_stake) or max_stake <= 0:
+            logger.warning("V4 [ZERO FREE STAKE]: Saldo livre insuficiente em %s (max_stake=%s).", pair, max_stake)
             return 0.0
         total_wallet = max(float(max_stake), float(proposed_stake), 0.0)
         wallets = getattr(self, "wallets", None)

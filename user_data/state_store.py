@@ -14,6 +14,7 @@ import time
 logger = logging.getLogger("state_store")
 
 _STATE_LOCK = threading.RLock()
+_LOCAL_STATE = threading.local()
 _TABLE_ENSURED = False
 _MEM_CACHE: dict[str, tuple[float, dict]] = {}
 _DEFAULT_CACHE_TTL_SECS = 5.0
@@ -60,6 +61,7 @@ def _ensure_table(conn) -> None:
 
 
 def db_get(key: str) -> dict | None:
+    _LOCAL_STATE.db_get_failed = False
     conn = None
     try:
         conn = _connect()
@@ -77,6 +79,7 @@ def db_get(key: str) -> dict | None:
                     return json.loads(val)
                 return val
     except Exception as exc:
+        _LOCAL_STATE.db_get_failed = True
         logger.debug("state_store db_get(%s) indisponível: %s", key, exc)
         return None
     finally:
@@ -141,9 +144,11 @@ def load_state(
                 if p.exists():
                     data = json.loads(p.read_text(encoding="utf-8"))
                     _MEM_CACHE[key] = (now, dict(data))
-                    db_set(key, data)  # migração transparente para o Neon
+                    if not getattr(_LOCAL_STATE, "db_get_failed", False):
+                        db_set(key, data)  # migração transparente para o Neon apenas quando DB respondeu sem erro
                     return {**default, **data}
-            except Exception:
+            except Exception as exc:
+                logger.debug("state_store cache read %s falhou: %s", p, exc)
                 continue
         return dict(default)
 

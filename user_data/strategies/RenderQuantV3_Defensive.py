@@ -104,6 +104,12 @@ class RenderQuantV3_Defensive(IStrategy):
     def _record_telemetry(self, dataframe: DataFrame, pair: str) -> None:
         if dataframe.empty or not pair:
             return
+        if not hasattr(self, "_last_v3_telemetry_ts"):
+            self._last_v3_telemetry_ts: dict[str, float] = {}
+        now_ts = time.time()
+        if (now_ts - self._last_v3_telemetry_ts.get(pair, 0.0)) < 60.0:
+            return
+        self._last_v3_telemetry_ts[pair] = now_ts
         paths = [
             pathlib.Path("/tmp/why_state.json"),
             pathlib.Path("/freqtrade/user_data/why_state.json"),
@@ -231,6 +237,7 @@ class RenderQuantV3_Defensive(IStrategy):
     ) -> float:
         """Risk parity: 1% da banca por trade, cap 10%, com reserva de taxas e veto estrito se min_stake violar risco."""
         if not np.isfinite(max_stake) or max_stake <= 0:
+            logger.warning("V3 [ZERO FREE STAKE]: Saldo livre insuficiente em %s (max_stake=%s).", pair, max_stake)
             return 0.0
         total_wallet = max(float(max_stake), float(proposed_stake), 0.0)
         wallets = getattr(self, "wallets", None)
