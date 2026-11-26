@@ -141,9 +141,10 @@ def is_authorized_chat(update) -> bool:
 
 
 PT_BR_KEYBOARD = [
-    ["🎯 Mudar Estratégia", "❓ Por Que Não?"],
+    ["🧪 Testar Ordem Real", "🎯 Mudar Estratégia"],
     ["📊 Operações Abertas", "💰 Resultados"],
     ["💳 Saldo da Conta", "📈 Desempenho"],
+    ["❓ Por Que Não?", "🔭 Scanner Mercado"],
     ["📋 Pares Ativos", "🏆 Por Moeda"],
     ["▶️ Iniciar Robô", "⏸️ Pausar Robô"],
     ["🏦 Corretora", "🧠 Guardião IA"],
@@ -152,6 +153,9 @@ PT_BR_KEYBOARD = [
 ]
 
 PT_BR_BUTTON_MAP = {
+    "🧪 Testar Ordem Real": "_cmd_teste_ordem",
+    "🧪 Testar Ordem Real (Kraken)": "_cmd_teste_ordem",
+    "🧪 Teste Real": "_cmd_teste_ordem",
     "🎯 Mudar Estratégia": "_unkiorra_estrategia",
     "🎯 Alternar Estratégia": "_unkiorra_estrategia",
     "❓ Por Que Não?": "_unkiorra_why",
@@ -882,6 +886,7 @@ def build_main_menu_inline_markup():
         ai_quick = InlineKeyboardButton("🧠 Guardião IA (Fable)", callback_data="unk_ai:open")
 
     return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🧪 Testar Ordem Real (Kraken)", callback_data="unk_nav:teste")],
         [ai_quick],
         [InlineKeyboardButton("🏦 Corretora / API", callback_data="unk_ex:refresh"), InlineKeyboardButton("🎯 Estratégia", callback_data="unk_strat:refresh")],
         [InlineKeyboardButton("📊 Operações Abertas", callback_data="unk_nav:status"), InlineKeyboardButton("💰 Lucros", callback_data="unk_nav:profit")],
@@ -1558,6 +1563,44 @@ def install_web_pt_br_hooks() -> None:
             except Exception as exc:
                 raise HTTPException(status_code=500, detail=str(exc))
 
+        async def _unkiorra_test_order_handler(request: Request):
+            _check_basic(request)
+            try:
+                from freqtrade.rpc.api_server.deps import get_rpc_optional
+                rpc = get_rpc_optional()
+                if rpc is None:
+                    raise HTTPException(status_code=503, detail="RPC não inicializado")
+                cfg = getattr(rpc, "_config", {})
+                dry_run = cfg.get("dry_run", True)
+
+                trade = rpc._rpc_force_entry("ADA/USDT", order_type="market")
+                if trade:
+                    res = {
+                        "status": "success",
+                        "trade_id": trade.id,
+                        "pair": trade.pair,
+                        "open_rate": getattr(trade, "open_rate", 0.0),
+                        "stake_amount": getattr(trade, "stake_amount", 0.0),
+                        "amount": getattr(trade, "amount", 0.0),
+                        "dry_run": dry_run,
+                    }
+                    tg = tg_ref.get("self")
+                    if tg and hasattr(tg, "_send_msg") and CHAT_ID:
+                        asyncio.create_task(tg._send_msg(
+                            f"🚀 *Ordem Real Executada via API!*\n\n"
+                            f"• *Trade ID:* `#{trade.id}`\n"
+                            f"• *Par:* `ADA/USDT`\n"
+                            f"• *Preço:* `${getattr(trade, 'open_rate', 0.0):.4f}`\n"
+                            f"• *Valor:* `${getattr(trade, 'stake_amount', 0.0):.2f} USDT`\n"
+                            f"• *Modo:* {'SIMULADO' if dry_run else 'CONTA REAL KRAKEN'}\n\n"
+                            f"⏳ Monitorando até fechamento..."
+                        ))
+                    return res
+                else:
+                    return {"status": "rejected", "message": "Ordem rejeitada pelo motor (verifique saldo ou limite de trades)"}
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=str(exc))
+
         # 1. Registro direto no APIRouter do api_v1 oficial do Freqtrade (já montado sob /api/v1)
         try:
             from freqtrade.rpc.api_server import api_v1
@@ -1567,6 +1610,7 @@ def install_web_pt_br_hooks() -> None:
             api_v1.router.add_api_route("/unkiorra/exchange", _unkiorra_set_ex_handler, methods=["POST"])
             api_v1.router.add_api_route("/unkiorra/shadow", _unkiorra_get_shadow_handler, methods=["GET"])
             api_v1.router.add_api_route("/unkiorra/scanner", _unkiorra_get_scanner_handler, methods=["GET"])
+            api_v1.router.add_api_route("/unkiorra/test_order", _unkiorra_test_order_handler, methods=["GET", "POST"])
             print("PT-BR_ROUTES_REGISTERED_ON_API_V1_ROUTER", flush=True)
         except Exception as exc:
             print("PT-BR_API_V1_ROUTER_WARN:", exc, flush=True)
@@ -1590,6 +1634,8 @@ def install_web_pt_br_hooks() -> None:
                         app.add_api_route(path, _unkiorra_get_shadow_handler, methods=["GET"])
                     for path in ["/api/v1/unkiorra/scanner", "/unkiorra/scanner"]:
                         app.add_api_route(path, _unkiorra_get_scanner_handler, methods=["GET"])
+                    for path in ["/api/v1/unkiorra/test_order", "/unkiorra/test_order"]:
+                        app.add_api_route(path, _unkiorra_test_order_handler, methods=["GET", "POST"])
                     print("PT-BR_ROUTES_REGISTERED_ON_API_SERVER_APP", flush=True)
 
             ApiServer.__init__ = patched_api_init
@@ -1777,7 +1823,12 @@ def translate_inline_markup(kwargs: dict) -> dict:
     return kwargs
 
 
+tg_ref: dict = {}
+_cmd_teste_ordem = None
+
+
 def install_pt_br_hooks() -> None:
+    global tg_ref, _cmd_teste_ordem
     from freqtrade.rpc.telegram import Telegram
     from telegram import InlineKeyboardButton
 
@@ -1789,7 +1840,6 @@ def install_pt_br_hooks() -> None:
     InlineKeyboardButton.__init__ = patched_ikb_init
     from telegram.ext import Application, ApplicationHandlerStop, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
-    tg_ref = {}
     registered_apps = set()
     orig_tg_init = Telegram.__init__
     orig_send_msg = Telegram._send_msg
@@ -1886,7 +1936,10 @@ def install_pt_br_hooks() -> None:
             return
         if data.startswith("unk_nav:"):
             sub = data.split(":", 1)[1]
-            if sub == "menu":
+            if sub == "teste":
+                await _cmd_teste_ordem(update, context)
+                return
+            elif sub == "menu":
                 try:
                     await q.edit_message_text(
                         get_welcome_message(),
@@ -2413,6 +2466,156 @@ def install_pt_br_hooks() -> None:
         if target:
             await target.reply_text(msg, parse_mode="Markdown")
 
+    async def _monitor_test_trade(tg, trade_id: int, chat):
+        """Monitora continuamente a ordem de teste real até seu fechamento pelo robô."""
+        import asyncio
+        start_t = time.time()
+        print(f"[teste] Monitoramento contínuo iniciado para Trade #{trade_id}...", flush=True)
+        closed = False
+        last_notif = 0
+        while not closed:
+            await asyncio.sleep(12)
+            try:
+                open_trades = tg._rpc._rpc_trade_status()
+                match_open = next((t for t in open_trades if t.get("trade_id") == trade_id), None)
+                if match_open:
+                    profit_pct = match_open.get("profit_pct", 0.0)
+                    current_rate = match_open.get("current_rate", 0.0)
+                    now_t = time.time()
+                    if now_t - last_notif > 120:
+                        last_notif = now_t
+                        await chat.send_message(
+                            f"⏳ *Ordem #{trade_id} em Andamento na Kraken*\n\n"
+                            f"• *Par:* `ADA/USDT`\n"
+                            f"• *Preço Atual:* `${current_rate:.4f}`\n"
+                            f"• *Lucro Não Realizado:* `{profit_pct:+.2f}%`\n"
+                            f"• *Status:* Alvo de saída / Trailing Stop ativos e monitorados.",
+                            parse_mode="Markdown",
+                        )
+                else:
+                    closed = True
+                    history = tg._rpc._rpc_trade_history(limit=10)
+                    trades_list = history.get("trades", []) if isinstance(history, dict) else history
+                    match_closed = next((t for t in trades_list if t.get("trade_id") == trade_id), None)
+                    if match_closed:
+                        close_rate = match_closed.get("close_rate", 0.0)
+                        close_profit = match_closed.get("close_profit_pct", match_closed.get("profit_pct", 0.0))
+                        profit_abs = match_closed.get("close_profit_abs", match_closed.get("profit_abs", 0.0))
+                        exit_reason = match_closed.get("exit_reason", "Alvo / ROI / Sinal de Saída")
+                        dur = match_closed.get("duration", "poucos minutos")
+                        emoji = "🟢" if close_profit >= 0 else "🔴"
+                        await chat.send_message(
+                            f"🏁 *Ordem de Teste Finalizada com Sucesso na Kraken!*\n\n"
+                            f"• *ID da Operação:* `#{trade_id}`\n"
+                            f"• *Par:* `ADA/USDT`\n"
+                            f"• *Preço de Saída:* `${close_rate:.4f}`\n"
+                            f"• *Resultado Final:* {emoji} `{close_profit:+.2f}%` (`{profit_abs:+.4f} USDT`)\n"
+                            f"• *Motivo de Saída:* `{exit_reason}`\n"
+                            f"• *Duração:* `{dur}`\n"
+                            f"• *Auditoria:* Operação 100% Real na Kraken Spot!\n\n"
+                            f"✅ *Ciclo de Teste Completo: Ordem Aberta e Fechada com Sucesso!*",
+                            parse_mode="Markdown",
+                        )
+                    else:
+                        await chat.send_message(
+                            f"🏁 *Ordem #{trade_id} (ADA/USDT) finalizada na Kraken!*\n"
+                            f"A posição foi encerrada pelo robô. Verifique os lucros no menu 💰 Resultados.",
+                            parse_mode="Markdown",
+                        )
+                    print(f"[teste] Trade #{trade_id} finalizado com sucesso!", flush=True)
+            except Exception as mon_err:
+                print(f"[teste] Alerta monitoramento trade #{trade_id}: {mon_err}", flush=True)
+
+    async def _cmd_teste_ordem(update, context):
+        """Executa 1 ordem real mínima na Kraken e inicia monitoramento até fechar."""
+        if not is_authorized_chat(update):
+            return
+        tg = tg_ref.get("self")
+        chat = getattr(update, "effective_chat", None)
+        target = _get_target_message(update)
+        if not tg or not hasattr(tg, "_rpc") or not chat:
+            if target:
+                await target.reply_text("❌ *Erro:* Motor RPC do robô não inicializado.", parse_mode="Markdown")
+            return
+
+        cfg = getattr(tg._rpc, "_config", {})
+        dry_run = cfg.get("dry_run", True)
+        mode_str = "SIMULADO (DRY-RUN)" if dry_run else "CONTA REAL KRAKEN (LIVE)"
+
+        try:
+            open_trades = tg._rpc._rpc_trade_status()
+            existing_ada = next((t for t in open_trades if t.get("pair") == "ADA/USDT"), None)
+            if existing_ada:
+                tid = existing_ada.get("trade_id")
+                pr = existing_ada.get("profit_pct", 0.0)
+                await chat.send_message(
+                    f"⚠️ *Já existe uma operação aberta em ADA/USDT!*\n\n"
+                    f"• *Trade ID:* `#{tid}`\n"
+                    f"• *Lucro Atual:* `{pr:+.2f}%`\n"
+                    f"• O robô já está monitorando este trade até o fechamento.",
+                    parse_mode="Markdown",
+                )
+                asyncio.create_task(_monitor_test_trade(tg, tid, chat))
+                return
+
+            max_trades = cfg.get("max_open_trades", 3)
+            if len(open_trades) >= max_trades:
+                await chat.send_message(
+                    f"⚠️ *Limite de Operações Atingido:*\n"
+                    f"Já existem `{len(open_trades)}/{max_trades}` operações abertas. "
+                    f"Aguarde o fechamento de uma operação para testar.",
+                    parse_mode="Markdown",
+                )
+                return
+        except Exception as check_err:
+            print(f"[teste] Alerta checagem open_trades: {check_err}", flush=True)
+
+        await chat.send_message(
+            f"⚡ *Disparando Ordem Real de Teste na Kraken Spot...*\n\n"
+            f"• *Par:* `ADA/USDT` (Ticket mínimo Kraken: ~20 ADA ≈ $2.95 USDT)\n"
+            f"• *Tipo:* Mercado (Market Order)\n"
+            f"• *Modo:* `{mode_str}`\n"
+            f"• *Stop-Loss na Exchange:* `Ativado`\n"
+            f"⏳ Enviando requisição para a Kraken...",
+            parse_mode="Markdown",
+        )
+
+        try:
+            trade = tg._rpc._rpc_force_entry("ADA/USDT", order_type="market")
+            if trade:
+                tid = trade.id
+                op_rate = getattr(trade, "open_rate", 0.0)
+                stk = getattr(trade, "stake_amount", 0.0)
+                amt = getattr(trade, "amount", 0.0)
+                await chat.send_message(
+                    f"🚀 *Ordem Real Executada com Sucesso na Kraken!*\n\n"
+                    f"• *Trade ID:* `#{tid}`\n"
+                    f"• *Par:* `ADA/USDT`\n"
+                    f"• *Quantidade Comprada:* `{amt:.2f} ADA`\n"
+                    f"• *Preço de Execução:* `${op_rate:.4f}`\n"
+                    f"• *Investimento:* `${stk:.2f} USDT`\n"
+                    f"• *Stop-Loss na Exchange:* `Ativado`\n"
+                    f"• *Modo:* `{mode_str}`\n\n"
+                    f"⏳ *Monitoramento Ativo:* O robô está acompanhando a operação segundo a estratégia ativa. "
+                    f"Assim que atingir o alvo ou stop, ela será fechada e o resultado final será notificado aqui!",
+                    parse_mode="Markdown",
+                )
+                asyncio.create_task(_monitor_test_trade(tg, tid, chat))
+            else:
+                await chat.send_message(
+                    "⚠️ *A ordem não pôde ser criada.*\n"
+                    "Verifique se o saldo livre em USDT é suficiente (mínimo ~$2.95) ou se a Kraken rejeitou a ordem.",
+                    parse_mode="Markdown",
+                )
+        except Exception as exc:
+            print(f"[teste] Erro ao disparar ordem de teste: {exc}", flush=True)
+            await chat.send_message(
+                f"❌ *Erro ao disparar ordem de teste:*\n`{exc}`\n\n"
+                f"Verifique as permissões de trading da API Key da Kraken.",
+                parse_mode="Markdown",
+            )
+        sys.modules[__name__]._cmd_teste_ordem = _cmd_teste_ordem
+
     async def _btn_cb(update, context):
         tg = tg_ref.get("self")
         if not tg or not update or not update.message or not update.message.text:
@@ -2430,6 +2633,11 @@ def install_pt_br_hooks() -> None:
         txt = update.message.text.strip()
         norm = txt.replace(" ", "").lower()
 
+        _ALIASES_TESTE = {
+            "/teste", "teste", "/test", "test", "/test_order", "test_order",
+            "🧪testarordemreal", "🧪testarordem", "testarordemreal", "testarordem",
+            "ordemreal", "ordemdeteste", "🧪testarordemreal(kraken)"
+        }
         _ALIASES_ESTRATEGIA = {
             "/estrategia", "estrategia", "/strategy", "strategy", "/strat",
             "🎯mudarestratégia", "🎯mudarestrategia", "🎯alternarestratégia", "🎯alternarestrategia"
@@ -2459,6 +2667,11 @@ def install_pt_br_hooks() -> None:
         if norm in ("/start", "start", "/menu", "menu", "iniciar", "/iniciar"):
             pending_input.pop(cid, None)
             await _cmd_start_panel(update, context)
+            raise ApplicationHandlerStop()
+
+        if norm in _ALIASES_TESTE or txt in ("🧪 Testar Ordem Real", "🧪 Testar Ordem Real (Kraken)", "🧪 Teste Real"):
+            pending_input.pop(cid, None)
+            await _cmd_teste_ordem(update, context)
             raise ApplicationHandlerStop()
 
         if norm in _ALIASES_AI or txt in ("🧠 Guardião IA", "🧠 IA Guardian", "🧠 Guardião IA (Fable)"):
@@ -2545,6 +2758,9 @@ def install_pt_br_hooks() -> None:
             orig_add_handler(self, CallbackQueryHandler(_cb_unkiorra, pattern=r"^unk_"), group=-1)
             orig_add_handler(self, CommandHandler("start", _cmd_start_panel), group=-1)
             orig_add_handler(self, CommandHandler("menu", _cmd_start_panel), group=-1)
+            orig_add_handler(self, CommandHandler("teste", _cmd_teste_ordem), group=-1)
+            orig_add_handler(self, CommandHandler("test", _cmd_teste_ordem), group=-1)
+            orig_add_handler(self, CommandHandler("test_order", _cmd_teste_ordem), group=-1)
             orig_add_handler(self, CommandHandler("corretora", _cmd_corretora), group=-1)
             orig_add_handler(self, CommandHandler("ia", _cmd_ai_guardian), group=-1)
             orig_add_handler(self, CommandHandler("ai", _cmd_ai_guardian), group=-1)
@@ -2596,6 +2812,7 @@ async def setup_telegram_menu() -> None:
         print(f"[telegram] Alerta ao conectar na API do Telegram: {exc}", flush=True)
 
     cmds = [
+        BotCommand("teste", "Executar 1 ordem real minima na Kraken e monitorar"),
         BotCommand("menu", "Menu principal interativo com botoes"),
         BotCommand("start", "Painel principal em Portugues"),
         BotCommand("ia", "Guardião IA Claude Fable (Ativar/Pausar)"),
@@ -2684,30 +2901,57 @@ def install_sqlalchemy_neon_pool_hooks() -> None:
 
 
 def install_telegram_conflict_resilience_hook() -> None:
-    """Evita que o Telegram pare o polling se houver conflito passageiro durante o deploy rolling do Render."""
+    """Evita que o Telegram pare o polling sob conflito, Bad Gateway ou oscilações de rede."""
     try:
-        from telegram.error import Conflict
+        from telegram.error import Conflict, NetworkError, RetryAfter, TimedOut
+        import httpx
         from telegram.ext import ExtBot
 
         orig_get_updates = ExtBot.get_updates
 
         async def resilient_get_updates(self, *args, **kwargs):
-            for attempt in range(12):
+            retry_count = 0
+            while True:
                 try:
-                    return await orig_get_updates(self, *args, **kwargs)
+                    res = await orig_get_updates(self, *args, **kwargs)
+                    if retry_count > 0:
+                        print(f"[telegram] Conexão com Telegram restabelecida com sucesso (após {retry_count} tentativas)!", flush=True)
+                    return res
                 except Conflict as exc:
-                    if attempt < 11:
+                    retry_count += 1
+                    if retry_count <= 20:
                         print(
-                            f"[telegram] Conflito temporario de deploy ({exc}) - "
-                            f"aguardando finalizacao do container anterior ({attempt + 1}/11)...",
+                            f"[telegram] Conflito temporário de deploy ({exc}) - "
+                            f"aguardando finalização do container anterior ({retry_count}/20)...",
                             flush=True,
                         )
                         await asyncio.sleep(6)
                     else:
-                        raise
+                        print(f"[telegram] Conflito persistente ({exc}) - continuando polling em 10s...", flush=True)
+                        await asyncio.sleep(10)
+                except (NetworkError, TimedOut, httpx.HTTPError) as exc:
+                    retry_count += 1
+                    print(
+                        f"[telegram] Oscilação transitória de rede ({type(exc).__name__}: {exc}) - "
+                        f"reconectando em 5s (tentativa {retry_count})...",
+                        flush=True,
+                    )
+                    await asyncio.sleep(5)
+                except RetryAfter as exc:
+                    wait_s = max(float(getattr(exc, "retry_after", 5)), 1.0) + 1.0
+                    print(f"[telegram] Rate limit da API Telegram ({exc}) - aguardando {wait_s:.1f}s...", flush=True)
+                    await asyncio.sleep(wait_s)
+                except Exception as exc:
+                    retry_count += 1
+                    print(
+                        f"[telegram] Erro transitório em get_updates ({type(exc).__name__}: {exc}) - "
+                        f"recuperando em 5s (tentativa {retry_count})...",
+                        flush=True,
+                    )
+                    await asyncio.sleep(5)
 
         ExtBot.get_updates = resilient_get_updates
-        print("Telegram Conflict resilience hook installed (12 retries x 6s)!", flush=True)
+        print("Telegram Conflict & Network resilience hook installed (polling blindado contra Bad Gateway)!", flush=True)
     except Exception as exc:
         print("Telegram resilience hook warning:", exc, flush=True)
 

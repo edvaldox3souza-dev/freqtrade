@@ -1,14 +1,24 @@
 {
   "enabled": true,
-  "api_key": "",
+  "api_key": "fase32_test_key",
   "endpoint": "https://api.miraiapi.com/v1/chat/completions",
   "model": "claude-opus-5.5",
   "min_conviccao": 0.65,
-  "last_verdict": null,
-  "total_queries": 0,
+  "last_verdict": {
+    "aprovado": false,
+    "conviccao": 0.0,
+    "motivo": "Fail-closed: HTTP 401",
+    "origem": "fail_closed",
+    "pair": "BTC/USDT",
+    "mode": "RenderQuantV2_Institutional",
+    "side": "long",
+    "signal_tag": "s1",
+    "candle_bucket": 1995177,
+    "ts": "23:21:52 UTC"
+  },
+  "total_queries": 1,
   "total_vetoes": 0,
-  "total_approvals": 0,
+  "total_approvals": 1,
   "total_ai_exits": 0,
-  "enable_ai_exits": true,
-  "strict_mode": true
+  "enable_ai_exits": true
 }
