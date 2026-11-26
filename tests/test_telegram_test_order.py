@@ -131,7 +131,7 @@ async def test_cmd_teste_ordem_executa_force_entry():
         await cmd_map["teste"](good_update, MagicMock())
 
         # Verifica chamada oficial force_entry com ADA/USDT a mercado
-        mock_rpc._rpc_force_entry.assert_called_once_with("ADA/USDT", order_type="market")
+        mock_rpc._rpc_force_entry.assert_called_once_with("ADA/USDT", None, order_type="market")
         # Mensagens enviadas no chat
         assert good_update.effective_chat.send_message.call_count >= 2
         calls = [str(call) for call in good_update.effective_chat.send_message.call_args_list]
