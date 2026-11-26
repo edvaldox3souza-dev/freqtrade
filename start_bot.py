@@ -739,6 +739,9 @@ def ensure_runtime_config(
                 if cfg.get("fiat_display_currency", "") != "":
                     cfg["fiat_display_currency"] = ""
                     changed = True
+                if not cfg.get("force_entry_enable"):
+                    cfg["force_entry_enable"] = True
+                    changed = True
                 if TOKEN:
                     tg_cfg = cfg.setdefault("telegram", {})
                     tg_cfg["enabled"] = True
@@ -1573,6 +1576,7 @@ def install_web_pt_br_hooks() -> None:
                 if rpc is None:
                     raise HTTPException(status_code=503, detail="RPC não inicializado")
                 cfg = getattr(rpc, "_config", {})
+                cfg["force_entry_enable"] = True
                 dry_run = cfg.get("dry_run", True)
 
                 # Chamada oficial com price=None para ordem a mercado imediata
@@ -2548,6 +2552,7 @@ def install_pt_br_hooks() -> None:
             return
 
         cfg = getattr(tg._rpc, "_config", {})
+        cfg["force_entry_enable"] = True
         dry_run = cfg.get("dry_run", True)
         mode_str = "SIMULADO (DRY-RUN)" if dry_run else "CONTA REAL KRAKEN (LIVE)"
 
